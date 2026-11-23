@@ -4,7 +4,7 @@
  * Installation über HACS (Typ Dashboard) oder manuell als JavaScript-Modul (Dashboard-Ressource).
  * Alle Symbole sind eingebettet; Bildwert "ef:<name>" = eingebautes Symbol, sonst Pfad/URL.
  */
-const EF_VERSION = '1.3.0';
+const EF_VERSION = '1.3.1';
 
 // ICONS-START (automatisch erzeugt von tools/embed_icons.py)
 const EF_ICONS = {
@@ -409,7 +409,7 @@ class EnergieflussCard extends HTMLElement {
     const s1 = this._fmtState(c.grid.secondary_entity), s2 = this._fmtState(c.grid.secondary_entity_2);
     this._setNode('grid', this._fmtW(gridNet), Math.abs(gridNet) < c.threshold,
       `<span style="color:${gCol || 'inherit'}">${efEsc(gTxt)}</span>`,
-      (s1 || s2) ? `${s2 ? `<span style="color:${c.grid.color_export};opacity:.75">&#8592;&#8239;${efEsc(s1 ? s2.replace(/ kWh$/, '') : s2)}</span>` : ''}${s1 && s2 ? ' &nbsp;' : ''}${s1 ? `<span style="color:${c.grid.color_import};opacity:.75">&#8594;&#8239;${efEsc(s1)}</span>` : ''}` : '', true);
+      (s1 || s2) ? `heute ${s2 ? `<span style="color:${c.grid.color_export};opacity:.75">&#8592;&#8239;${efEsc(s1 ? s2.replace(/ kWh$/, '') : s2)}</span>` : ''}${s1 && s2 ? ' &nbsp;' : ''}${s1 ? `<span style="color:${c.grid.color_import};opacity:.75">&#8594;&#8239;${efEsc(s1)}</span>` : ''}` : '', true);
     // Akku
     const soc = this._num(c.battery.soc_entity);
     const bw = Math.max(bc, bd);
@@ -438,7 +438,7 @@ class EnergieflussCard extends HTMLElement {
     // Autarkie
     const aut = r.querySelector('.autarky');
     if (c.show_autarky) {
-      let a = null, label = 'Autarkie';
+      let a = null, label = c.autarky_mode === 'live' ? 'Autarkie' : 'Autarkie (live)';
       if (c.autarky_mode !== 'live') {
         // Tageswert: eigener Sensor oder 1 - Netzbezug heute / Hausverbrauch heute
         if (c.autarky_entity) {
@@ -691,7 +691,8 @@ class EnergieflussCardEditor extends HTMLElement {
           <div class="ef-cons"></div>
           <button class="ef-add">+ Verbraucher hinzufügen</button>
         </div>
-      </ha-expansion-panel>`;
+      </ha-expansion-panel>
+      <div class="ef-hint" style="text-align:right">Energiefluss Card ${EF_VERSION}</div>`;
     const main = document.createElement('ha-form');
     main.hass = this._hass;
     main.schema = EF_SCHEMA;

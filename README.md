@@ -13,6 +13,7 @@ Eine Home-Assistant-Karte, die den Energiefluss übersichtlich zeigt: PV oben, N
 - Wallbox wahlweise nur beim Laden, immer oder nie, mit Ladestand des Fahrzeugs
 - Einklappbare Verbraucherliste in fester Reihenfolge, nur aktive Verbraucher, mit eigenem Bild oder Symbol
 - Tippen, Halten und Doppeltippen mit den üblichen Home-Assistant-Aktionen
+- Dezenter Link zum Energie-Dashboard (abschaltbar)
 - Symbolstil wählbar: 3D (isometrisch) oder 2D (flach), Symbole aus [smart-home-icons](https://github.com/LinnFidelius/smart-home-icons)
 - Grafischer Editor, gegliedert nach Allgemein, PV, Netz, Akku, Haus, Wallbox und Verbrauchern
 
@@ -32,7 +33,7 @@ Mit HACS vor 2026.11 genauso über „Benutzerdefinierte Repositories“.
 
 Alle Symbole sind in die Karte eingebettet, es müssen keine Dateien kopiert werden. Im Editor lässt sich pro Knoten und Verbraucher ein eingebautes Symbol aus der Liste wählen oder ein eigener Pfad eintragen (z. B. `/local/meine-bilder/pv.png`).
 
-In YAML steht `ef:<name>` für ein eingebautes Symbol: `pv`, `netz`, `akku`, `haus`, `wallbox`, `waschmaschine`, `waschmaschine-2`, `trockner`, `kuehlschrank`, `klima`, `tv`, `schreibtisch`, `schreibtisch-2`, `serverschrank`, `heisswasserhahn`, `sprudelhahn`, `zwischenstecker`, `waermepumpe`, `warmwasser`, `gas`, `wasser`, `balkonkraftwerk`, `e-auto`, `geschirrspueler`, `herd`, `mikrowelle`, `kaffeemaschine`, `heissluftfritteuse`, `desktop-pc`, `laptop`, `tablet`, `handy`, `router`, `access-point`, `saugroboter`, `ventilator`, `videoklingel`, `kamera`, `bewegungsmelder`, `temperatursensor`, `fensterkontakt`, `thermostatkopf`, `heizkoerper`, `relais`, `rollladen`, `plotter`, `gluehbirne`, `spot`, `tischleuchte`, `lichtleiste`, `garage`, `haustuer`, `terrasse`, `poolpumpe`, `wischroboter-station`, `rauchmelder`, `wassersensor`, `steckdosenleiste`, `smart-speaker`, `drucker`.
+In YAML steht `ef:<name>` für ein eingebautes Symbol: `pv`, `netz`, `akku`, `haus`, `wallbox`, `waschmaschine`, `waschmaschine-2`, `trockner`, `kuehlschrank`, `klima`, `tv`, `schreibtisch`, `schreibtisch-2`, `serverschrank`, `heisswasserhahn`, `sprudelhahn`, `zwischenstecker`, `waermepumpe`, `warmwasser`, `gas`, `wasser`, `balkonkraftwerk`, `e-auto`, `geschirrspueler`, `herd`, `mikrowelle`, `kaffeemaschine`, `heissluftfritteuse`, `desktop-pc`, `laptop`, `tablet`, `handy`, `router`, `access-point`, `saugroboter`, `ventilator`, `videoklingel`, `kamera`, `bewegungsmelder`, `temperatursensor`, `fensterkontakt`, `thermostatkopf`, `heizkoerper`, `relais`, `rollladen`, `plotter`, `gluehbirne`, `spot`, `tischleuchte`, `lichtleiste`, `garage`, `haustuer`, `terrasse`, `poolpumpe`, `wischroboter-station`, `rauchmelder`, `wassersensor`, `steckdosenleiste`, `smart-speaker`, `drucker`, `nas`, `switch`, `server`, `backup-server`, `lxc`, `vm`, `windows-vm`, `smart-home`, `dateien`, `fotos`, `medien`, `passwoerter`, `dns-filter`, `reverse-proxy`, `vpn`, `dokumentensuche`, `kontakte`, `kalender`, `ki`, `gameserver`, `sprachchat`.
 
 ## Updates
 

@@ -15,6 +15,7 @@ new, n = re.subn(r'// ICONS-START.*?// ICONS-END', lambda m: block, src, flags=r
 if n != 1:
     sys.exit('Marker ICONS-START/ICONS-END nicht gefunden')
 mono = json.loads((root / 'icons' / 'mono-paths.json').read_text())
+mono = {k: v for k, v in mono.items() if k in icons}   # nur Symbole, die auch in der Karte sind
 mblock = '// MONO-START (automatisch erzeugt)\nconst EF_MONO = ' + json.dumps(mono, separators=(',', ':')) + ';\n// MONO-END'
 new, n = re.subn(r'// MONO-START.*?// MONO-END', lambda m: mblock, new, flags=re.S)
 if n != 1:

@@ -4,7 +4,7 @@
  * Installation über HACS (Typ Dashboard) oder manuell als JavaScript-Modul (Dashboard-Ressource).
  * Alle Symbole sind eingebettet; Bildwert "ef:<name>" = eingebautes Symbol, sonst Pfad/URL.
  */
-const EF_VERSION = '2.1.0';
+const EF_VERSION = '2.2.0';
 
 // ICONS-START (automatisch erzeugt von tools/embed_icons.py)
 const EF_ICONS = {
@@ -315,7 +315,8 @@ const EF_STUB = {
 // Nebenanlagen sitzen in der oberen Reihe: Volleinspeisung links (Linie ins Netz), angeschlossene PV rechts (Linie in die Haupt-PV)
 const efLayout = (c) => {
   const fis = (c.feed_in.systems || []).filter((x) => x && x.entity);
-  const pvx = (c.pv.extra || []).map((x, i) => ({ x, i })).filter((o) => o.x && o.x.entity && o.x.show_node).slice(0, 1);
+  const efNode = (x) => x.node || (x.show_node ? 'pv' : 'none');
+  const pvx = (c.pv.extra || []).map((x, i) => ({ x, i, mode: efNode(x) })).filter((o) => o.x && o.x.entity && o.mode !== 'none').slice(0, 1);
   const d = (fis.length || pvx.length) ? 26 : 0;   // mittlere und untere Reihe etwas tiefer, damit oben Platz ist
   const L = {
     pv_home: `M200 145 V ${262 + d}`,
@@ -344,8 +345,8 @@ const efLayout = (c) => {
   }
   if (pvx.length) {
     L.pv_batt = `M248 62 Q 270 62 270 ${104 + d / 2} Q 272 ${144 + d} 296 ${150 + d}`;
-    nodes.push({ key: 'px0', x: 348, w: 22, extra: pvx[0].i, kind: 'px' });
-    L.px0 = 'M318 40 H 250';
+    nodes.push({ key: 'px0', x: 348, w: 22, extra: pvx[0].i, kind: 'px', mode: pvx[0].mode });
+    L.px0 = pvx[0].mode === 'battery' ? `M348 136 V ${138 + d}` : 'M318 40 H 250';
   }
   return { L, H: 420 + d, d, fis, nodes, pvx };
 };
@@ -598,7 +599,9 @@ class EnergieflussCard extends HTMLElement {
   // ---------- Berechnung ----------
   _flows() {
     const c = this._config;
-    const pvList = [c.pv, ...(c.pv.extra || [])].filter((x) => x && x.entity);
+    const toBatt = (x) => (x.node || (x.show_node ? 'pv' : 'none')) === 'battery';
+    const pvList = [c.pv, ...(c.pv.extra || []).filter((x) => x && !toBatt(x))].filter((x) => x && x.entity);
+    const gpv = (c.pv.extra || []).filter((x) => x && x.entity && toBatt(x)).reduce((a, x) => a + Math.max(this._watts(x.entity), 0), 0);
     const pvEach = pvList.map((x) => Math.max(this._watts(x.entity), 0));
     const pv = pvEach.reduce((a, b) => a + b, 0);
     let imp, exp;
@@ -627,12 +630,13 @@ class EnergieflussCard extends HTMLElement {
     const f = {};
     f.pv_home = Math.min(pv, home);
     let rest = pv - f.pv_home;
-    f.pv_batt = Math.min(rest, bc); rest -= f.pv_batt;
+    const bcMain = Math.max(bc - gpv, 0);
+    f.pv_batt = Math.min(rest, bcMain); rest -= f.pv_batt;
     f.pv_grid = Math.min(rest, exp);
     let need = home - f.pv_home;
     f.batt_home = Math.min(bd, need); need -= f.batt_home;
     f.grid_home = Math.min(imp, need);
-    f.grid_batt = Math.min(Math.max(bc - f.pv_batt, 0), Math.max(imp - f.grid_home, 0));
+    f.grid_batt = Math.min(Math.max(bcMain - f.pv_batt, 0), Math.max(imp - f.grid_home, 0));
     f.batt_grid = Math.min(Math.max(bd - f.batt_home, 0), Math.max(exp - f.pv_grid, 0));
     f.home_wb = wb;
     (this._lay?.nodes || []).forEach((nd) => {
@@ -860,7 +864,7 @@ const EF_LABELS = {
   icon: 'Symbol (wenn kein Bild)', threshold_c: 'Schwelle (ab hier aktiv)',
   tap_action: 'Tippen', hold_action: 'Halten', double_tap_action: 'Doppeltippen',
   show_breakdown: 'Einzelwerte anzeigen', show_feed_in: 'Volleinspeisung anzeigen', show_total: 'Summe aller Einspeisungen anzeigen',
-  layout: 'Darstellung', show_node: 'Als eigener Knoten oben rechts (an Haupt-PV angeschlossen)',
+  layout: 'Darstellung', node: 'Darstellung (oben rechts)',
   speed_reference: 'Bezugswert für das Tempo', speed_max_w: 'Fester Bezugswert', consumers_icon_style: 'Symbolstil der Verbraucher'
 };
 
@@ -969,7 +973,9 @@ const EF_NUM = (min, max, step, unit) => ({ number: { min, max, step, mode: 'box
 const EF_PV_SCHEMA = [
   { name: 'entity', selector: S },
   { type: 'grid', name: '', schema: [{ name: 'name', selector: { text: {} } }, { name: 'secondary_entity', selector: S }] },
-  { name: 'show_node', selector: { boolean: {} } },
+  { name: 'node', selector: { select: { mode: 'dropdown', options: [
+    { value: 'none', label: 'nur in der PV-Summe' }, { value: 'pv', label: 'eigener Knoten, Linie in die Haupt-PV' },
+    { value: 'battery', label: 'eigener Knoten, Linie in den Akku (eigene Batterie)' }] } } },
   efSub('Bild', [{ name: 'image', selector: EF_IMG }]), efActions()
 ];
 const EF_FI_SCHEMA = [
@@ -985,7 +991,7 @@ const EF_BATT_SCHEMA = [
 ];
 const EF_LISTS = [
   { path: ['pv', 'extra'], title: 'Weitere PV-Anlagen (Eigenverbrauch)', schema: EF_PV_SCHEMA, add: '+ PV-Anlage hinzufügen',
-    hint: 'Werden mit der Haupt-PV summiert.', item: () => ({ entity: '', name: 'PV 2' }) },
+    hint: 'Werden mit der Haupt-PV summiert. Ausnahme: Anlagen mit Linie in den Akku (z. B. Garage-PV mit eigener Batterie).', item: () => ({ entity: '', name: 'PV 2' }) },
   { path: ['feed_in', 'systems'], title: 'Volleinspeise-Anlagen', schema: EF_FI_SCHEMA, add: '+ Volleinspeise-Anlage hinzufügen',
     hint: 'Speisen direkt ins Netz ein, ohne das Haus zu versorgen.', item: () => ({ entity: '', name: 'Anlage' }) },
   { path: ['battery', 'extra'], title: 'Weitere Akkus', schema: EF_BATT_SCHEMA, add: '+ Akku hinzufügen',
@@ -1081,7 +1087,7 @@ class EnergieflussCardEditor extends HTMLElement {
           <button class="ef-add">${l.add}</button>
         </div>
       </ha-expansion-panel>`).join('')}
-      <div class="ef-hint" style="text-align:right">Energiefluss Card ${EF_VERSION}</div>`;
+      <div class="ef-hint" style="display:flex;justify-content:space-between"><a href="https://github.com/LinnFidelius/energiefluss-card/issues/new/choose" target="_blank" rel="noopener" style="color:inherit">Fehler melden oder Wunsch äußern</a><span>Energiefluss Card ${EF_VERSION}</span></div>`;
     const main = document.createElement('ha-form');
     main.hass = this._hass;
     main.schema = EF_SCHEMA;

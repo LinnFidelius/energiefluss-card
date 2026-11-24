@@ -17,7 +17,7 @@ Die Vorschau klappt die Verbraucherliste automatisch auf und wieder zu.
 - Einklappbare Verbraucherliste in fester Reihenfolge, nur aktive Verbraucher, mit eigenem Bild oder Symbol
 - Tippen, Halten und Doppeltippen mit den üblichen Home-Assistant-Aktionen
 - Tempo der Linien zeigt die Leistung: Bezug ist die übliche Höchstleistung der letzten 12 Monate aus der HA-Langzeitstatistik (oder ein fester Wert)
-- Mehrere Anlagen: weitere PV-Anlagen für Eigenverbrauch (summiert, mit Einzelwerten; eine davon optional als eigener Knoten oben rechts, angeschlossen an die Haupt-PV), mehrere Akkus (Leistung summiert, Ladestand nach Kapazität gemittelt) und Volleinspeise-Anlagen oben links mit eigener Linie direkt ins Netz – wahlweise als ein Knoten mit Summe oder ein Knoten je Anlage (max. 2)
+- Mehrere Anlagen: weitere PV-Anlagen für Eigenverbrauch (summiert, mit Einzelwerten; eine davon optional als eigener Knoten oben rechts – mit Linie in die Haupt-PV oder in den Akku, z. B. für eine Garage-PV mit eigener Batterie), mehrere Akkus (Leistung summiert, Ladestand nach Kapazität gemittelt) und Volleinspeise-Anlagen oben links mit eigener Linie direkt ins Netz – wahlweise als ein Knoten mit Summe oder ein Knoten je Anlage (max. 2)
 - Netz zeigt den Hausanschluss, auf Wunsch zusätzlich die Volleinspeisung und die Summe aller Einspeisungen
 - Symbolstil der Verbraucherliste separat wählbar; bei Linie oder HA-Symbol kompakt in drei Spalten
 - Dezenter Link zum Energie-Dashboard (abschaltbar)
@@ -76,6 +76,10 @@ consumers:
     threshold: 5
 ```
 
+## Feedback
+
+Wünsche und Fehler gerne über [Issues](../../issues/new/choose) melden (GitHub-Konto nötig). In der Energiefluss Card führt auch der Link unten im Karten-Editor dorthin.
+
 ## Hinweise
 
 - Code, Symbole und Texte dieses Projekts wurden mit Claude (KI von Anthropic) erstellt und vom Betreiber des Repositorys geprüft und getestet.
@@ -98,7 +102,7 @@ pv:
     - entity: sensor.pv_garage_power
       name: Garage
       secondary_entity: sensor.pv_garage_today
-      show_node: true   # eigener Knoten, Linie in die Haupt-PV
+      node: battery   # eigener Knoten oben rechts; pv = Linie in die Haupt-PV, battery = Linie in den Akku
 battery:
   soc_entity: sensor.akku1_soc
   charge_entity: sensor.akku1_charge

@@ -17,7 +17,7 @@ Die Vorschau klappt die Verbraucherliste automatisch auf und wieder zu.
 - Einklappbare Verbraucherliste in fester Reihenfolge, nur aktive Verbraucher, mit eigenem Bild oder Symbol
 - Tippen, Halten und Doppeltippen mit den üblichen Home-Assistant-Aktionen
 - Tempo der Linien zeigt die Leistung: Bezug ist die übliche Höchstleistung der letzten 12 Monate aus der HA-Langzeitstatistik (oder ein fester Wert)
-- Mehrere Anlagen: weitere PV-Anlagen für Eigenverbrauch (summiert, mit Einzelwerten; eine davon optional als eigener Knoten oben rechts – mit Linie in die Haupt-PV oder in den Akku, z. B. für eine Garage-PV mit eigener Batterie), mehrere Akkus (Leistung summiert, Ladestand nach Kapazität gemittelt) und Volleinspeise-Anlagen oben links mit eigener Linie direkt ins Netz – wahlweise als ein Knoten mit Summe oder ein Knoten je Anlage (max. 2)
+- Mehrere Anlagen: weitere PV-Anlagen für Eigenverbrauch (summiert, mit Einzelwerten; eine davon optional als eigener Knoten oben rechts – mit Linie in die Haupt-PV oder in den Akku, z. B. für eine Garage-PV mit eigener Batterie), mehrere Akkus (Leistung summiert, Ladestand nach Kapazität gemittelt; ein Akku optional getrennt mit eigenem Knoten, z. B. Garage-PV → Garagen-Akku → Haus) und Volleinspeise-Anlagen oben links mit eigener Linie direkt ins Netz – wahlweise als ein Knoten mit Summe oder ein Knoten je Anlage (max. 2)
 - Netz zeigt den Hausanschluss, auf Wunsch zusätzlich die Volleinspeisung und die Summe aller Einspeisungen
 - Symbolstil der Verbraucherliste separat wählbar; bei Linie oder HA-Symbol kompakt in drei Spalten
 - Dezenter Link zum Energie-Dashboard (abschaltbar)
@@ -113,6 +113,7 @@ battery:
       power_entity: sensor.akku2_power
       capacity_kwh: 10
       min_soc: 5
+      separate: true   # eigener Knoten; die Garage-PV mit node: battery lädt dann nur diesen Akku
 feed_in:
   layout: combined   # oder separate
   systems:

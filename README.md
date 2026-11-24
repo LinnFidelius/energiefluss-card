@@ -2,7 +2,14 @@
 
 Eine Home-Assistant-Karte, die den Energiefluss übersichtlich zeigt: PV oben, Netz links, Akku rechts, Haus unten und eine Wallbox, sobald sie lädt. Die Symbole sind isometrische 3D-Bilder, die Linien zeigen nur aktive Flüsse mit langsamer, leistungsabhängiger Animation.
 
-![Vorschau 3D](docs/vorschau.gif) ![Vorschau 2D](docs/vorschau-2d.gif)
+<img src="docs/vorschau.gif" width="49%" alt="Vorschau 3D"> <img src="docs/vorschau-2d.gif" width="49%" alt="Vorschau 2D">
+
+<details>
+<summary><b>Verbraucher aufklappen</b></summary>
+
+<img src="docs/vorschau-offen.gif" width="49%" alt="Vorschau 3D mit Verbrauchern"> <img src="docs/vorschau-2d-offen.gif" width="49%" alt="Vorschau 2D mit allen Verbrauchern">
+
+</details>
 
 ## Funktionen
 

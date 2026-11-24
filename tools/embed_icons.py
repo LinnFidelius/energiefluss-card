@@ -14,5 +14,10 @@ block = '// ICONS-START (automatisch erzeugt von tools/embed_icons.py)\nconst EF
 new, n = re.subn(r'// ICONS-START.*?// ICONS-END', lambda m: block, src, flags=re.S)
 if n != 1:
     sys.exit('Marker ICONS-START/ICONS-END nicht gefunden')
+mono = json.loads((root / 'icons' / 'mono-paths.json').read_text())
+mblock = '// MONO-START (automatisch erzeugt)\nconst EF_MONO = ' + json.dumps(mono, separators=(',', ':')) + ';\n// MONO-END'
+new, n = re.subn(r'// MONO-START.*?// MONO-END', lambda m: mblock, new, flags=re.S)
+if n != 1:
+    sys.exit('Marker MONO-START/MONO-END nicht gefunden')
 js.write_text(new, encoding='utf-8')
 print(f'{len(icons)} Symbole eingebettet')

@@ -4,7 +4,7 @@
  * Installation über HACS (Typ Dashboard) oder manuell als JavaScript-Modul (Dashboard-Ressource).
  * Alle Symbole sind eingebettet; Bildwert "ef:<name>" = eingebautes Symbol, sonst Pfad/URL.
  */
-const EF_VERSION = '2.3.0';
+const EF_VERSION = '2.4.0';
 
 // ICONS-START (automatisch erzeugt von tools/embed_icons.py)
 const EF_ICONS = {
@@ -359,8 +359,14 @@ const efLayout = (c) => {
     const toGb = gb && pvx[0].mode === 'battery';
     nodes.push({ key: 'px0', x: toGb ? 366 : 348, w: 22, extra: pvx[0].i, kind: 'px', mode: pvx[0].mode });
     L.px0 = pvx[0].mode === 'battery' ? `M${toGb ? 366 : 348} 136 V ${toGb ? 164 + d : 138 + d}` : 'M318 40 H 250';
+    if (pvx[0].mode === 'battery') {
+      const sx = toGb ? 336 : 318;
+      L.gx_home = `M${sx} 92 C 262 96, 252 ${170 + d}, 246 ${266 + d}`;
+      L.gx_grid = `M${sx} 76 C 262 76, 236 ${120 + d}, 236 ${148 + d} Q 236 ${164 + d} 212 ${164 + d} H 112`;
+    }
   }
-  return { L, H: 420 + d, d, fis, nodes, pvx, gb, gbi, battX, battW };
+  const bridge = ['gx_home', 'gx_grid'];   // werden über andere Linien gelegt
+  return { L, H: 420 + d, d, fis, nodes, pvx, gb, gbi, battX, battW, bridge };
 };
 
 const efMerge = (base, over) => {
@@ -461,12 +467,17 @@ class EnergieflussCard extends HTMLElement {
     const lay = this._lay = efLayout(c);
     this._lines = lay.L;
     this._offsets = {}; this._speeds = {};
-    const lines = Object.entries(lay.L).map(([k, d]) =>
-      `<g id="g-${k}" style="display:none"><path d="${d}" class="base"/><path id="d-${k}" d="${d}" class="dots"/></g>`).join('');
+    const order = Object.keys(lay.L).sort((a, b) => lay.bridge.includes(a) - lay.bridge.includes(b));
+    // Brücken: darunterliegende Linien werden entlang der Brückenlinie ausgespart (Maske, unabhängig von der Hintergrundfarbe)
+    const br = order.filter((k) => lay.bridge.includes(k));
+    const mask = br.length ? `<defs><mask id="ef-under" maskUnits="userSpaceOnUse" x="-20" y="-20" width="440" height="${lay.H + 40}">
+      <rect x="-20" y="-20" width="440" height="${lay.H + 40}" fill="white"/>${br.map((k) => `<path id="h-${k}" d="${lay.L[k]}" class="halo" style="display:none"/>`).join('')}</mask></defs>` : '';
+    const one = (k) => `<g id="g-${k}" style="display:none"><path d="${lay.L[k]}" class="base"/><path id="d-${k}" d="${lay.L[k]}" class="dots"/></g>`;
+    const lines = mask + `<g ${br.length ? 'mask="url(#ef-under)"' : ''}>${order.filter((k) => !br.includes(k)).map(one).join('')}</g>` + br.map(one).join('');
     const top = (px) => (px / lay.H * 100).toFixed(2);
     const node = (key, x, ypx, n = c[key], w = 30) => `<div class="node${w < 30 ? ' small' : ''}" id="n-${key}" data-node="${key}" style="left:${x}%;top:${top(ypx)}%;width:${w}%">
         ${efPic(n.image, c.icon_style, n.color || (key === 'grid' ? '#FF9999' : ''))}
-        <div class="val"></div><div class="sub"></div><div class="sub2"></div><div class="sub3"></div></div>`;
+        <div class="val"></div><div class="sub"></div><div class="sub2"></div><div class="sub3"></div><div class="sub4"></div></div>`;
     const fiNodes = lay.nodes.map((nd) => {
       if (nd.kind === 'bx') {
         const x = c.battery.extra[nd.extra];
@@ -488,6 +499,7 @@ class EnergieflussCard extends HTMLElement {
         .flow { position:relative; width:100%; aspect-ratio:400/${lay.H}; }
         svg.lines { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; overflow:visible; }
         .base { fill:none; stroke-width:2; opacity:.45; }
+        .halo { fill:none; stroke-width:12; stroke:black; stroke-linecap:round; }
         .dots { fill:none; stroke-width:6; stroke-linecap:round; stroke-dasharray:0 14; }
         .node { position:absolute; width:30%; transform:translateX(-50%); text-align:center; cursor:pointer;
                 -webkit-tap-highlight-color:transparent; user-select:none; }
@@ -497,8 +509,8 @@ class EnergieflussCard extends HTMLElement {
         .val { font-size:16px; font-weight:500; white-space:nowrap; color:var(--primary-text-color); line-height:1.3; }
         .val.idle { color:var(--secondary-text-color); }
         .node.small img { width:64%; } .node.small svg.mono { width:40%; margin:8% auto 4%; } .node.small .val { font-size:13px; } .node.small .sub, .node.small .sub2 { font-size:11px; }
-        .sub, .sub2, .sub3 { font-size:12px; white-space:nowrap; color:var(--secondary-text-color); line-height:1.35; }
-        .sub:empty, .sub2:empty, .sub3:empty { display:none; }
+        .sub, .sub2, .sub3, .sub4 { font-size:12px; white-space:nowrap; color:var(--secondary-text-color); line-height:1.35; }
+        .sub:empty, .sub2:empty, .sub3:empty, .sub4:empty { display:none; }
         .chip { display:inline-block; color:#1c1c1c; font-weight:500; padding:0 8px; border-radius:6px; }
         .elink { position:absolute; top:1%; left:2%; font-size:12px; color:var(--secondary-text-color); cursor:pointer; opacity:.75; text-decoration:none; z-index:2; }
         .elink:hover { opacity:1; }
@@ -650,22 +662,30 @@ class EnergieflussCard extends HTMLElement {
     if (c.wallbox.unit === 'kW') wb *= 1000;
     wb = Math.max(wb, 0);
 
+    // Reihenfolge: PV deckt zuerst das Haus, dann Akkus, Rest ins Netz. Akkus teilen sich den Bedarf anteilig.
     const f = {};
+    const gTarget = gbCfg ? gbp.bc : bc;                  // Akku, den die angeschlossene PV lädt
+    const gToB = Math.min(gpv, gTarget);
+    let gSur = gpv - gToB;                                 // Überschuss der angeschlossenen PV
+    const bcMain = gbCfg ? bc : Math.max(bc - gToB, 0);
     f.pv_home = Math.min(pv, home);
+    let need = home - f.pv_home;
+    f.gx_home = Math.min(gSur, need); need -= f.gx_home; gSur -= f.gx_home;
     let rest = pv - f.pv_home;
-    const bcMain = gbCfg ? bc : Math.max(bc - gpv, 0);
     f.pv_batt = Math.min(rest, bcMain); rest -= f.pv_batt;
     f.pv_grid = Math.min(rest, exp);
-    let need = home - f.pv_home;
-    f.batt_home = Math.min(bd, need); need -= f.batt_home;
-    f.bx_home = Math.min(gbp.bd, need); need -= f.bx_home;
+    f.gx_grid = Math.min(gSur, Math.max(exp - f.pv_grid, 0));
+    const dis = bd + gbp.bd, toHome = Math.min(dis, need);
+    f.batt_home = dis > 0 ? toHome * bd / dis : 0;
+    f.bx_home = dis > 0 ? toHome * gbp.bd / dis : 0;
+    need -= toHome;
     f.grid_home = Math.min(imp, need);
     f.grid_batt = Math.min(Math.max(bcMain - f.pv_batt, 0), Math.max(imp - f.grid_home, 0));
-    f.batt_grid = Math.min(Math.max(bd - f.batt_home, 0), Math.max(exp - f.pv_grid, 0));
+    f.batt_grid = Math.min(Math.max(bd - f.batt_home, 0), Math.max(exp - f.pv_grid - f.gx_grid, 0));
     f.home_wb = wb;
     (this._lay?.nodes || []).forEach((nd) => {
       if (nd.kind === 'bx') return;
-      f[nd.key] = nd.kind === 'px' ? Math.max(this._watts(c.pv.extra[nd.extra].entity), 0) : nd.sys.reduce((a, i) => a + (fiEach[i] || 0), 0);
+      f[nd.key] = nd.kind === 'px' ? (nd.mode === 'battery' ? gToB : Math.max(this._watts(c.pv.extra[nd.extra].entity), 0)) : nd.sys.reduce((a, i) => a + (fiEach[i] || 0), 0);
     });
     return { f, pv, imp, exp, bc, bd, home, wb, pvList, pvEach, batts, battEach, fis, fiEach, fi, gbCfg, gbp };
   }
@@ -712,7 +732,7 @@ class EnergieflussCard extends HTMLElement {
     const col = {
       pv_home: c.pv.color, pv_batt: c.pv.color, pv_grid: c.grid.color_export, batt_grid: c.grid.color_export,
       grid_batt: c.grid.color_import, grid_home: c.grid.color_import, batt_home: c.battery.color, home_wb: c.wallbox.color,
-      fi0: c.grid.color_export, fi1: c.grid.color_export, px0: c.pv.color, bx_home: c.battery.color
+      fi0: c.grid.color_export, fi1: c.grid.color_export, px0: c.pv.color, bx_home: c.battery.color, gx_home: c.pv.color, gx_grid: c.grid.color_export
     };
     const wbVisible = c.wallbox.entity && (c.wallbox.mode === 'always' || (c.wallbox.mode === 'auto' && wb > 0));
     for (const k of Object.keys(this._lines)) {
@@ -720,6 +740,7 @@ class EnergieflussCard extends HTMLElement {
       const on = p >= c.threshold && (k !== 'home_wb' || wbVisible);
       const g = r.getElementById('g-' + k);
       g.style.display = on ? '' : 'none';
+      const hl = r.getElementById('h-' + k); if (hl) hl.style.display = on ? '' : 'none';
       if (on) g.querySelectorAll('path').forEach((pa) => pa.setAttribute('stroke', col[k]));
       this._speeds[k] = on ? this._speed(p) : 0;
     }
@@ -755,10 +776,10 @@ class EnergieflussCard extends HTMLElement {
       `<span style="color:${gCol || 'inherit'}">${efEsc(gTxt)}</span>`,
       (s1 || s2) ? `heute ${s2 ? `<span style="color:${c.grid.color_export};opacity:.75">&#8592;&#8239;${efEsc(s1 ? s2.replace(/ kWh$/, '') : s2)}</span>` : ''}${s1 && s2 ? ' &nbsp;' : ''}${s1 ? `<span style="color:${c.grid.color_import};opacity:.75">&#8594;&#8239;${efEsc(s1)}</span>` : ''}` : '', true);
     if (fis.length && (c.grid.show_feed_in || c.grid.show_total)) {
-      const parts = [];
-      if (c.grid.show_feed_in) parts.push(`Volleinsp. ${this._fmtW(fi)}`);
-      if (c.grid.show_total) { const tot = exp + fi - imp; parts.push(`gesamt ${tot >= 0 ? '&#8592;' : '&#8594;'}&#8239;${this._fmtW(tot)}`); }
-      r.getElementById('n-grid').querySelector('.sub3').innerHTML = `<span style="color:${c.grid.color_export};opacity:.85">${parts.join(' · ')}</span>`;
+      const ng = r.getElementById('n-grid'), sp = (t) => `<span style="color:${c.grid.color_export};opacity:.85">${t}</span>`;
+      const tot = exp + fi - imp;
+      ng.querySelector('.sub3').innerHTML = c.grid.show_feed_in ? sp(`Volleinspeisung ${this._fmtW(fi)}`) : '';
+      ng.querySelector('.sub4').innerHTML = c.grid.show_total ? sp(`gesamt ${tot >= 0 ? '&#8592;' : '&#8594;'}&#8239;${this._fmtW(tot)}`) : '';
     }
     // Akku
     // Ladestand: nach Kapazität gewichtet; Restlaufzeit aus nutzbarer Energie aller Akkus

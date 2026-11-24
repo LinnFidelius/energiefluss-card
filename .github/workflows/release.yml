@@ -1,0 +1,29 @@
+name: Release
+
+# Legt automatisch ein GitHub-Release an, sobald sich EF_VERSION in der Karte ändert.
+on:
+  push:
+    branches: [main]
+    paths: [energiefluss-card.js]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Version lesen
+        id: v
+        run: echo "version=$(grep -oP "EF_VERSION = '\K[^']+" energiefluss-card.js)" >> "$GITHUB_OUTPUT"
+      - name: Release anlegen (falls neu)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo "v$VERSION existiert bereits"
+          else
+            gh release create "v$VERSION" energiefluss-card.js --title "$VERSION" --notes "$(git log -1 --pretty=%s)"
+          fi

@@ -16,6 +16,8 @@ Die Vorschau klappt die Verbraucherliste automatisch auf und wieder zu.
 - Wallbox wahlweise nur beim Laden, immer oder nie, mit Ladestand des Fahrzeugs
 - Einklappbare Verbraucherliste in fester Reihenfolge, nur aktive Verbraucher, mit eigenem Bild oder Symbol
 - Tippen, Halten und Doppeltippen mit den üblichen Home-Assistant-Aktionen
+- Mehrere Anlagen: weitere PV-Anlagen für Eigenverbrauch (summiert, mit Einzelwerten), mehrere Akkus (Leistung summiert, Ladestand nach Kapazität gemittelt) und Volleinspeise-Anlagen mit eigener Linie direkt ins Netz – wahlweise als ein Knoten mit Summe oder ein Knoten je Anlage
+- Netz zeigt den Hausanschluss, auf Wunsch zusätzlich die Volleinspeisung und die Summe aller Einspeisungen
 - Dezenter Link zum Energie-Dashboard (abschaltbar)
 - Symbolstil wählbar: 3D (isometrisch), 2D (flach) oder Linie wie die HA-Icons, Symbole aus [smart-home-icons](https://github.com/LinnFidelius/smart-home-icons)
 - Grafischer Editor, gegliedert nach Allgemein, PV, Netz, Akku, Haus, Wallbox und Verbrauchern
@@ -82,3 +84,40 @@ consumers:
 ## Lizenz
 
 MIT, siehe [LICENSE](LICENSE). Gilt für Code und Symbole.
+
+## Mehrere Anlagen (Beispiel)
+
+```yaml
+type: custom:energiefluss-card
+pv:
+  entity: sensor.pv_dach_power
+  name: Dach
+  extra:
+    - entity: sensor.pv_garage_power
+      name: Garage
+      secondary_entity: sensor.pv_garage_today
+battery:
+  soc_entity: sensor.akku1_soc
+  charge_entity: sensor.akku1_charge
+  discharge_entity: sensor.akku1_discharge
+  extra:
+    - name: Akku 2
+      soc_entity: sensor.akku2_soc
+      power_entity: sensor.akku2_power
+      capacity_kwh: 10
+      min_soc: 5
+feed_in:
+  layout: combined   # oder separate
+  systems:
+    - entity: sensor.anlage_sued_power
+      name: Süd
+      secondary_entity: sensor.anlage_sued_today
+    - entity: sensor.anlage_west_power
+      name: West
+grid:
+  entity: sensor.grid_power
+  show_feed_in: true
+  show_total: true
+```
+
+Der Netz-Sensor misst dabei nur den Hausanschluss; die Volleinspeise-Anlagen haben eigene Sensoren.

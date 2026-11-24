@@ -4,7 +4,7 @@
  * Installation über HACS (Typ Dashboard) oder manuell als JavaScript-Modul (Dashboard-Ressource).
  * Alle Symbole sind eingebettet; Bildwert "ef:<name>" = eingebautes Symbol, sonst Pfad/URL.
  */
-const EF_VERSION = '1.9.1';
+const EF_VERSION = '2.0.0';
 
 // ICONS-START (automatisch erzeugt von tools/embed_icons.py)
 const EF_ICONS = {
@@ -266,16 +266,18 @@ const EF_DEFAULTS = {
   threshold: 20,
   kilo_threshold: 1000,
   decimals_kw: 1,
-  pv: { entity: '', name: 'PV', image: 'ef:pv', color: '#FFE8A2', secondary_entity: '' },
+  pv: { entity: '', name: 'PV', image: 'ef:pv', color: '#FFE8A2', secondary_entity: '', show_breakdown: true, extra: [] },
   grid: {
     entity: '', invert: false, import_entity: '', export_entity: '', name: 'Netz', image: 'ef:netz',
-    color_import: '#FF9999', color_export: '#C6E0B4', secondary_entity: '', secondary_entity_2: ''
+    color_import: '#FF9999', color_export: '#C6E0B4', secondary_entity: '', secondary_entity_2: '',
+    show_feed_in: true, show_total: true
   },
   battery: {
     soc_entity: '', charge_entity: '', discharge_entity: '', power_entity: '', invert: false,
     capacity_kwh: 7.78, min_soc: 6, show_runtime: true, name: 'Akku', image: 'ef:akku',
-    color: '#C6E0B4'
+    color: '#C6E0B4', show_breakdown: true, extra: []
   },
+  feed_in: { layout: 'combined', name: 'Volleinspeisung', image: 'ef:pv', color: '#FFE8A2', show_breakdown: true, systems: [] },
   home: { entity: '', name: 'Haus', image: 'ef:haus', color: '#9AC1E4', secondary_entity: '' },
   wallbox: {
     entity: '', unit: 'kW', soc_entity: '', soc_label: 'Auto', mode: 'auto', name: 'Wallbox',
@@ -306,16 +308,36 @@ const EF_STUB = {
   ]
 };
 
-// Linien im Koordinatensystem 400 x 420; Richtung = Flussrichtung
-const EF_LINES = {
-  pv_home: 'M200 145 V 262',
-  pv_grid: 'M152 50 Q 60 50 60 136',
-  pv_batt: 'M248 50 Q 340 50 340 136',
-  grid_batt: 'M110 180 H 290',
-  batt_grid: 'M290 180 H 110',
-  grid_home: 'M110 200 Q 180 200 180 262',
-  batt_home: 'M290 200 Q 220 200 220 262',
-  home_wb: 'M250 313 H 290'
+// Linien im Koordinatensystem 400 x H; Richtung = Flussrichtung. dy = Höhe des Bands für Volleinspeise-Anlagen
+const EF_BAND = 175;
+const efLayout = (c) => {
+  const fis = (c.feed_in.systems || []).filter((x) => x && x.entity);
+  const dy = fis.length ? EF_BAND : 0;
+  const L = {
+    pv_home: `M200 ${145 + dy} V ${262 + dy}`,
+    pv_grid: `M152 ${50 + dy} Q 60 ${50 + dy} 60 ${136 + dy}`,
+    pv_batt: `M248 ${50 + dy} Q 340 ${50 + dy} 340 ${136 + dy}`,
+    grid_batt: `M110 ${180 + dy} H 290`,
+    batt_grid: `M290 ${180 + dy} H 110`,
+    grid_home: `M110 ${200 + dy} Q 180 ${200 + dy} 180 ${262 + dy}`,
+    batt_home: `M290 ${200 + dy} Q 220 ${200 + dy} 220 ${262 + dy}`,
+    home_wb: `M250 ${313 + dy} H 290`
+  };
+  // Volleinspeisung: Knoten im Band oben, Linie links am Rand zum Netz
+  const nodes = [];
+  if (fis.length) {
+    if (c.feed_in.layout === 'separate') {
+      fis.slice(0, 3).forEach((x, i) => {
+        const cx = [45, 135, 225][i];
+        nodes.push({ key: 'fi' + i, x: cx, w: 22, sys: [i] });
+        L['fi' + i] = cx === 45 ? `M45 ${EF_BAND - 14} V ${136 + dy}` : `M${cx} ${EF_BAND - 14} C ${cx} ${EF_BAND + 4}, 45 ${EF_BAND - 4}, 45 ${EF_BAND + 14} V ${136 + dy}`;
+      });
+    } else {
+      nodes.push({ key: 'fi0', x: 60, w: 30, sys: fis.map((_, i) => i) });
+      L.fi0 = `M60 ${EF_BAND - 4} V ${136 + dy}`;
+    }
+  }
+  return { L, dy, H: 420 + dy, fis, nodes };
 };
 
 const efMerge = (base, over) => {
@@ -413,20 +435,26 @@ class EnergieflussCard extends HTMLElement {
   // ---------- Aufbau ----------
   _build() {
     const c = this._config;
-    const lines = Object.entries(EF_LINES).map(([k, d]) =>
+    const lay = this._lay = efLayout(c);
+    this._lines = lay.L;
+    this._offsets = {}; this._speeds = {};
+    const lines = Object.entries(lay.L).map(([k, d]) =>
       `<g id="g-${k}" style="display:none"><path d="${d}" class="base"/><path id="d-${k}" d="${d}" class="dots"/></g>`).join('');
-    const node = (key, x, y) => {
-      const n = c[key];
-      return `<div class="node" id="n-${key}" data-node="${key}" style="left:${x}%;top:${y}%">
+    const top = (px) => (px / lay.H * 100).toFixed(2);
+    const node = (key, x, ypx, n = c[key], w = 30) => `<div class="node${w < 30 ? ' small' : ''}" id="n-${key}" data-node="${key}" style="left:${x}%;top:${top(ypx)}%;width:${w}%">
         ${efPic(n.image, c.icon_style, n.color || (key === 'grid' ? '#FF9999' : ''))}
-        <div class="val"></div><div class="sub"></div><div class="sub2"></div></div>`;
-    };
+        <div class="val"></div><div class="sub"></div><div class="sub2"></div><div class="sub3"></div></div>`;
+    const fiNodes = lay.nodes.map((nd) => {
+      const sys = lay.fis[nd.sys[0]];
+      const n = nd.sys.length > 1 ? c.feed_in : { ...c.feed_in, ...sys, image: sys.image || c.feed_in.image };
+      return node(nd.key, nd.x / 4, 22, n, nd.w);
+    }).join('');
     this.shadowRoot.innerHTML = `
       <style>
         :host { display:block; }
         ha-card { ${c.transparent ? 'background:transparent;box-shadow:none;border:none;' : ''} overflow:hidden; }
         .title { font-size:16px; font-weight:500; padding:12px 16px 0; color:var(--primary-text-color); }
-        .flow { position:relative; width:100%; aspect-ratio:400/420; }
+        .flow { position:relative; width:100%; aspect-ratio:400/${lay.H}; }
         svg.lines { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; overflow:visible; }
         .base { fill:none; stroke-width:2; opacity:.45; }
         .dots { fill:none; stroke-width:6; stroke-linecap:round; stroke-dasharray:0 14; }
@@ -437,8 +465,9 @@ class EnergieflussCard extends HTMLElement {
         .ci svg.mono { width:22px; height:22px; flex:none; }
         .val { font-size:16px; font-weight:500; white-space:nowrap; color:var(--primary-text-color); line-height:1.3; }
         .val.idle { color:var(--secondary-text-color); }
-        .sub, .sub2 { font-size:12px; white-space:nowrap; color:var(--secondary-text-color); line-height:1.35; }
-        .sub:empty, .sub2:empty { display:none; }
+        .node.small .val { font-size:14px; } .node.small .sub, .node.small .sub2 { font-size:11px; }
+        .sub, .sub2, .sub3 { font-size:12px; white-space:nowrap; color:var(--secondary-text-color); line-height:1.35; }
+        .sub:empty, .sub2:empty, .sub3:empty { display:none; }
         .chip { display:inline-block; color:#1c1c1c; font-weight:500; padding:0 8px; border-radius:6px; }
         .elink { position:absolute; top:1%; left:2%; font-size:12px; color:var(--secondary-text-color); cursor:pointer; opacity:.75; text-decoration:none; z-index:2; }
         .elink:hover { opacity:1; }
@@ -464,10 +493,10 @@ class EnergieflussCard extends HTMLElement {
       <ha-card>
         ${c.title ? `<div class="title">${efEsc(c.title)}</div>` : ''}
         <div class="flow">
-          <svg class="lines" viewBox="0 0 400 420">${lines}</svg>
+          <svg class="lines" viewBox="0 0 400 ${lay.H}">${lines}</svg>
           <div class="autarky"></div>
           ${c.energy_link ? `<a class="elink" title="Energie-Dashboard öffnen">Energie &#8250;</a>` : ''}
-          ${node('pv', 50, 3)}${node('grid', 15, 34)}${node('battery', 85, 34)}${node('home', 50, 64)}${node('wallbox', 85, 66)}
+          ${fiNodes}${node('pv', 50, 12.6 + lay.dy)}${node('grid', 15, 142.8 + lay.dy)}${node('battery', 85, 142.8 + lay.dy)}${node('home', 50, 268.8 + lay.dy)}${node('wallbox', 85, 277.2 + lay.dy)}
         </div>
         ${c.consumers.length ? `<div class="cons ${this._open ? 'open' : ''}">
           <div class="cons-head"><span><span class="ct">${efEsc(c.consumers_title)}</span><span class="info"></span></span><span class="chev">&#8250;</span></div>
@@ -492,6 +521,12 @@ class EnergieflussCard extends HTMLElement {
 
   // ---------- Aktionen (tap / hold / double_tap wie in HA üblich) ----------
   _actionCfg(kind, key) {
+    if (kind === 'node' && key.startsWith('fi')) {
+      const nd = this._lay.nodes.find((x) => x.key === key);
+      const sys = this._lay.fis[nd.sys[0]];
+      const n = nd.sys.length > 1 ? this._config.feed_in : sys;
+      return { entity: sys.entity, tap_action: n.tap_action || { action: 'more-info' }, hold_action: n.hold_action || { action: 'none' }, double_tap_action: n.double_tap_action || { action: 'none' } };
+    }
     if (kind === 'node') {
       const n = this._config[key];
       const entity = key === 'battery' ? (n.soc_entity || n.discharge_entity || n.power_entity) : (n.entity || n.import_entity);
@@ -540,7 +575,9 @@ class EnergieflussCard extends HTMLElement {
   // ---------- Berechnung ----------
   _flows() {
     const c = this._config;
-    const pv = Math.max(this._watts(c.pv.entity), 0);
+    const pvList = [c.pv, ...(c.pv.extra || [])].filter((x) => x && x.entity);
+    const pvEach = pvList.map((x) => Math.max(this._watts(x.entity), 0));
+    const pv = pvEach.reduce((a, b) => a + b, 0);
     let imp, exp;
     if (c.grid.import_entity || c.grid.export_entity) {
       imp = Math.max(this._watts(c.grid.import_entity), 0);
@@ -549,14 +586,16 @@ class EnergieflussCard extends HTMLElement {
       const g = this._watts(c.grid.entity) * (c.grid.invert ? -1 : 1);
       imp = Math.max(g, 0); exp = Math.max(-g, 0);
     }
-    let bc, bd;
-    if (c.battery.charge_entity || c.battery.discharge_entity) {
-      bc = Math.max(this._watts(c.battery.charge_entity), 0);
-      bd = Math.max(this._watts(c.battery.discharge_entity), 0);
-    } else {
-      const b = this._watts(c.battery.power_entity) * (c.battery.invert ? -1 : 1);
-      bd = Math.max(b, 0); bc = Math.max(-b, 0);
-    }
+    const batts = [c.battery, ...(c.battery.extra || [])].filter((x) => x && (x.soc_entity || x.charge_entity || x.discharge_entity || x.power_entity));
+    const battEach = batts.map((x) => {
+      if (x.charge_entity || x.discharge_entity) return { bc: Math.max(this._watts(x.charge_entity), 0), bd: Math.max(this._watts(x.discharge_entity), 0) };
+      const b = this._watts(x.power_entity) * (x.invert ? -1 : 1);
+      return { bd: Math.max(b, 0), bc: Math.max(-b, 0) };
+    });
+    const bc = battEach.reduce((a, b) => a + b.bc, 0), bd = battEach.reduce((a, b) => a + b.bd, 0);
+    const fis = (c.feed_in.systems || []).filter((x) => x && x.entity);
+    const fiEach = fis.map((x) => Math.max(this._watts(x.entity), 0));
+    const fi = fiEach.reduce((a, b) => a + b, 0);
     const home = Math.max(this._watts(c.home.entity), 0);
     let wb = c.wallbox.entity ? this._num(c.wallbox.entity) : 0;
     if (c.wallbox.unit === 'kW') wb *= 1000;
@@ -573,7 +612,8 @@ class EnergieflussCard extends HTMLElement {
     f.grid_batt = Math.min(Math.max(bc - f.pv_batt, 0), Math.max(imp - f.grid_home, 0));
     f.batt_grid = Math.min(Math.max(bd - f.batt_home, 0), Math.max(exp - f.pv_grid, 0));
     f.home_wb = wb;
-    return { f, pv, imp, exp, bc, bd, home, wb };
+    (this._lay?.nodes || []).forEach((nd) => { f[nd.key] = nd.sys.reduce((a, i) => a + (fiEach[i] || 0), 0); });
+    return { f, pv, imp, exp, bc, bd, home, wb, pvList, pvEach, batts, battEach, fis, fiEach, fi };
   }
 
   _speed(p) {
@@ -585,13 +625,17 @@ class EnergieflussCard extends HTMLElement {
   _update() {
     const c = this._config, r = this.shadowRoot;
     if (!r.querySelector('.flow')) return;
-    const { f, pv, imp, exp, bc, bd, home, wb } = this._flows();
+    const { f, pv, imp, exp, bc, bd, home, wb, pvList, pvEach, batts, fis, fiEach, fi } = this._flows();
+    const kw = (w) => (w / 1000).toFixed(1).replace('.', ',');
+    const sumKwh = (ids) => { let t = 0, any = false; ids.forEach((id) => { const v = this._kwh(id); if (!isNaN(v)) { t += v; any = true; } }); return any ? t : NaN; };
+    const fmtKwh = (v) => isNaN(v) ? '' : v.toFixed(v >= 100 ? 0 : 1).replace('.', ',') + ' kWh';
     const col = {
       pv_home: c.pv.color, pv_batt: c.pv.color, pv_grid: c.grid.color_export, batt_grid: c.grid.color_export,
-      grid_batt: c.grid.color_import, grid_home: c.grid.color_import, batt_home: c.battery.color, home_wb: c.wallbox.color
+      grid_batt: c.grid.color_import, grid_home: c.grid.color_import, batt_home: c.battery.color, home_wb: c.wallbox.color,
+      fi0: c.grid.color_export, fi1: c.grid.color_export, fi2: c.grid.color_export
     };
     const wbVisible = c.wallbox.entity && (c.wallbox.mode === 'always' || (c.wallbox.mode === 'auto' && wb > 0));
-    for (const k of Object.keys(EF_LINES)) {
+    for (const k of Object.keys(this._lines)) {
       const p = f[k] || 0;
       const on = p >= c.threshold && (k !== 'home_wb' || wbVisible);
       const g = r.getElementById('g-' + k);
@@ -601,7 +645,21 @@ class EnergieflussCard extends HTMLElement {
     }
 
     // PV
-    this._setNode('pv', this._fmtW(pv), pv < c.threshold, this._fmtState(c.pv.secondary_entity) ? 'heute ' + this._fmtState(c.pv.secondary_entity) : '', '');
+    const pvDay = pvList.length > 1 ? fmtKwh(sumKwh(pvList.map((x) => x.secondary_entity).filter(Boolean))) : this._fmtState(c.pv.secondary_entity);
+    const pvBreak = (pvList.length > 1 && c.pv.show_breakdown) ? pvList.map((x, i) => `${x.name || 'PV ' + (i + 1)} ${kw(pvEach[i])}`).join(' · ') + ' kW' : '';
+    this._setNode('pv', this._fmtW(pv), pv < c.threshold, pvDay ? 'heute ' + pvDay : '', pvBreak);
+    // Volleinspeisung
+    (this._lay.nodes || []).forEach((nd) => {
+      const p = nd.sys.reduce((a, i) => a + (fiEach[i] || 0), 0);
+      const day = fmtKwh(sumKwh(nd.sys.map((i) => fis[i].secondary_entity).filter(Boolean)));
+      if (nd.sys.length > 1) {
+        const br = c.feed_in.show_breakdown ? nd.sys.map((i) => `${fis[i].name || 'Anlage ' + (i + 1)} ${kw(fiEach[i])}`).join(' · ') + ' kW' : '';
+        this._setNode(nd.key, this._fmtW(p), p < c.threshold, efEsc(c.feed_in.name) + (day ? ' · heute ' + day : ''), efEsc(br), true);
+      } else {
+        const sys = fis[nd.sys[0]];
+        this._setNode(nd.key, this._fmtW(p), p < c.threshold, efEsc(sys.name || 'Anlage ' + (nd.sys[0] + 1)), day ? 'heute ' + day : '', true);
+      }
+    });
     // Netz
     const gridNet = imp - exp;
     const gTxt = Math.abs(gridNet) < c.threshold ? c.grid.name : (gridNet > 0 ? 'Bezug' : 'Einspeisung');
@@ -610,20 +668,32 @@ class EnergieflussCard extends HTMLElement {
     this._setNode('grid', this._fmtW(gridNet), Math.abs(gridNet) < c.threshold,
       `<span style="color:${gCol || 'inherit'}">${efEsc(gTxt)}</span>`,
       (s1 || s2) ? `heute ${s2 ? `<span style="color:${c.grid.color_export};opacity:.75">&#8592;&#8239;${efEsc(s1 ? s2.replace(/ kWh$/, '') : s2)}</span>` : ''}${s1 && s2 ? ' &nbsp;' : ''}${s1 ? `<span style="color:${c.grid.color_import};opacity:.75">&#8594;&#8239;${efEsc(s1)}</span>` : ''}` : '', true);
+    if (fis.length && (c.grid.show_feed_in || c.grid.show_total)) {
+      const parts = [];
+      if (c.grid.show_feed_in) parts.push(`Volleinsp. ${this._fmtW(fi)}`);
+      if (c.grid.show_total) { const tot = exp + fi - imp; parts.push(`gesamt ${tot >= 0 ? '&#8592;' : '&#8594;'}&#8239;${this._fmtW(tot)}`); }
+      r.getElementById('n-grid').querySelector('.sub3').innerHTML = `<span style="color:${c.grid.color_export};opacity:.85">${parts.join(' · ')}</span>`;
+    }
     // Akku
-    const soc = this._num(c.battery.soc_entity);
+    // Ladestand: nach Kapazität gewichtet; Restlaufzeit aus nutzbarer Energie aller Akkus
+    const bInfo = batts.map((x) => ({ name: x.name, soc: this._num(x.soc_entity), cap: x.capacity_kwh ?? c.battery.capacity_kwh, min: x.min_soc ?? c.battery.min_soc, has: !!x.soc_entity }));
+    const capSum = bInfo.reduce((a, b) => a + (b.has ? b.cap : 0), 0);
+    const soc = capSum > 0 ? bInfo.reduce((a, b) => a + (b.has ? b.soc * b.cap : 0), 0) / capSum : this._num(c.battery.soc_entity);
+    const usable = bInfo.reduce((a, b) => a + (b.has ? Math.max(b.soc - b.min, 0) / 100 * b.cap : 0), 0);
     const bw = Math.max(bc, bd);
     let run = '';
-    if (c.battery.show_runtime && bd >= 50 && soc > c.battery.min_soc) {
-      const h = c.battery.capacity_kwh * (soc - c.battery.min_soc) / 100 * 1000 / bd;
+    if (c.battery.show_runtime && bd >= 50 && usable > 0) {
+      const h = usable * 1000 / bd;
       if (h > 24) run = 'reicht über 24 h';
       else {
         const t = new Date(Date.now() + h * 3600000);
         run = 'bis ' + t.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
       }
     }
-    const chip = c.battery.soc_entity ? `<span class="chip" style="background:${c.battery.color}">${Math.round(soc)} %</span>` : '';
+    const chip = capSum > 0 ? `<span class="chip" style="background:${c.battery.color}">${Math.round(soc)} %</span>` : '';
     this._setNode('battery', this._fmtW(bw), bw < c.threshold, chip, efEsc(run), true);
+    r.getElementById('n-battery').querySelector('.sub3').textContent = (batts.length > 1 && c.battery.show_breakdown)
+      ? bInfo.map((b, i) => `${b.name || 'Akku ' + (i + 1)} ${Math.round(b.soc)} %`).join(' · ') : '';
     // Haus
     const hs = this._fmtState(c.home.secondary_entity);
     this._setNode('home', this._fmtW(home), home < c.threshold, hs ? 'heute ' + efEsc(hs) : '', '', true);
@@ -731,7 +801,9 @@ const EF_LABELS = {
   unit: 'Einheit des Sensors', soc_label: 'Bezeichnung Fahrzeug', mode: 'Anzeigen', consumers_title: 'Überschrift',
   consumers_open: 'Beim Laden aufgeklappt', consumers_only_active: 'Nur aktive Verbraucher zeigen',
   icon: 'Symbol (wenn kein Bild)', threshold_c: 'Schwelle (ab hier aktiv)',
-  tap_action: 'Tippen', hold_action: 'Halten', double_tap_action: 'Doppeltippen'
+  tap_action: 'Tippen', hold_action: 'Halten', double_tap_action: 'Doppeltippen',
+  show_breakdown: 'Einzelwerte anzeigen', show_feed_in: 'Volleinspeisung anzeigen', show_total: 'Summe aller Einspeisungen anzeigen',
+  layout: 'Darstellung'
 };
 
 const efSub = (title, schema) => ({ type: 'expandable', name: '', flatten: true, title, schema });
@@ -771,15 +843,16 @@ const EF_SCHEMA = [
       { name: 'decimals_kw', selector: { number: { min: 0, max: 3, step: 1, mode: 'box' } } }
     ] }
   ] },
-  { type: 'expandable', name: 'pv', title: 'PV', schema: [
-    efSub('Sensoren', [{ name: 'entity', selector: S }, { name: 'secondary_entity', selector: S }]),
+  { type: 'expandable', name: 'pv', title: 'PV (Eigenverbrauch)', schema: [
+    efSub('Sensoren', [{ name: 'entity', selector: S }, { name: 'secondary_entity', selector: S }, { name: 'show_breakdown', selector: { boolean: {} } }]),
     efLook(['color']), efActions()
   ] },
   { type: 'expandable', name: 'grid', title: 'Netz', schema: [
     efSub('Sensoren', [
       { name: 'entity', selector: S }, { name: 'invert', selector: { boolean: {} } },
       { name: 'import_entity', selector: S }, { name: 'export_entity', selector: S },
-      { name: 'secondary_entity', selector: S }, { name: 'secondary_entity_2', selector: S }
+      { name: 'secondary_entity', selector: S }, { name: 'secondary_entity_2', selector: S },
+      { type: 'grid', name: '', schema: [{ name: 'show_feed_in', selector: { boolean: {} } }, { name: 'show_total', selector: { boolean: {} } }] }
     ]),
     efLook(['color_import', 'color_export']), efActions()
   ] },
@@ -793,8 +866,15 @@ const EF_SCHEMA = [
         { name: 'capacity_kwh', selector: { number: { min: 0, max: 100, step: 0.01, mode: 'box', unit_of_measurement: 'kWh' } } },
         { name: 'min_soc', selector: { number: { min: 0, max: 100, step: 1, mode: 'box', unit_of_measurement: '%' } } }
       ] },
-      { name: 'show_runtime', selector: { boolean: {} } }
+      { name: 'show_runtime', selector: { boolean: {} } },
+      { name: 'show_breakdown', selector: { boolean: {} } }
     ]),
+    efLook(['color']), efActions()
+  ] },
+  { type: 'expandable', name: 'feed_in', title: 'Volleinspeisung – Darstellung', schema: [
+    { name: 'layout', selector: { select: { mode: 'dropdown', options: [
+      { value: 'combined', label: 'Ein Knoten mit Summe' }, { value: 'separate', label: 'Ein Knoten je Anlage (max. 3)' }] } } },
+    { name: 'show_breakdown', selector: { boolean: {} } },
     efLook(['color']), efActions()
   ] },
   { type: 'expandable', name: 'home', title: 'Haus', schema: [
@@ -821,6 +901,40 @@ const EF_SCHEMA = [
   ] }
 ];
 
+const EF_NUM = (min, max, step, unit) => ({ number: { min, max, step, mode: 'box', unit_of_measurement: unit } });
+const EF_PV_SCHEMA = [
+  { name: 'entity', selector: S },
+  { type: 'grid', name: '', schema: [{ name: 'name', selector: { text: {} } }, { name: 'secondary_entity', selector: S }] }
+];
+const EF_FI_SCHEMA = [
+  { name: 'entity', selector: S },
+  { type: 'grid', name: '', schema: [{ name: 'name', selector: { text: {} } }, { name: 'secondary_entity', selector: S }] },
+  efSub('Bild', [{ name: 'image', selector: EF_IMG }]), efActions()
+];
+const EF_BATT_SCHEMA = [
+  { name: 'name', selector: { text: {} } },
+  { name: 'soc_entity', selector: S }, { name: 'charge_entity', selector: S }, { name: 'discharge_entity', selector: S },
+  { name: 'power_entity', selector: S }, { name: 'invert', selector: { boolean: {} } },
+  { type: 'grid', name: '', schema: [{ name: 'capacity_kwh', selector: EF_NUM(0, 100, 0.01, 'kWh') }, { name: 'min_soc', selector: EF_NUM(0, 100, 1, '%') }] }
+];
+const EF_LISTS = [
+  { path: ['pv', 'extra'], title: 'Weitere PV-Anlagen (Eigenverbrauch)', schema: EF_PV_SCHEMA, add: '+ PV-Anlage hinzufügen',
+    hint: 'Werden mit der Haupt-PV summiert.', item: () => ({ entity: '', name: 'PV 2' }) },
+  { path: ['feed_in', 'systems'], title: 'Volleinspeise-Anlagen', schema: EF_FI_SCHEMA, add: '+ Volleinspeise-Anlage hinzufügen',
+    hint: 'Speisen direkt ins Netz ein, ohne das Haus zu versorgen.', item: () => ({ entity: '', name: 'Anlage' }) },
+  { path: ['battery', 'extra'], title: 'Weitere Akkus', schema: EF_BATT_SCHEMA, add: '+ Akku hinzufügen',
+    hint: 'Leistung wird summiert, der Ladestand nach Kapazität gemittelt.', item: () => ({ name: 'Akku 2', capacity_kwh: 10, min_soc: 5 }) },
+  { path: ['consumers'], title: 'Verbraucher', schema: null, add: '+ Verbraucher hinzufügen',
+    hint: 'Reihenfolge mit den Pfeilen festlegen. Ein Bild hat Vorrang vor dem Symbol.', item: () => ({ entity: '', name: 'Neuer Verbraucher', icon: 'mdi:flash', threshold: 5 }) }
+];
+const efGet = (o, path) => path.reduce((a, k) => (a ? a[k] : undefined), o) || [];
+const efSet = (o, path, val) => {
+  const out = { ...o };
+  if (path.length === 1) { out[path[0]] = val; return out; }
+  out[path[0]] = { ...(o[path[0]] || {}), [path[1]]: val };
+  return out;
+};
+
 const EF_CONSUMER_SCHEMA = [
   { name: 'entity', selector: S },
   { type: 'grid', name: '', schema: [
@@ -836,7 +950,6 @@ class EnergieflussCardEditor extends HTMLElement {
     super();
     this._config = {};
     this._built = false;
-    this._consLen = -1;
   }
 
   setConfig(config) {
@@ -895,13 +1008,13 @@ class EnergieflussCardEditor extends HTMLElement {
         .ef-inner { padding:0 4px 8px; }
       </style>
       <div class="ef-main"></div>
-      <ha-expansion-panel class="ef-cons-panel" outlined>
+      ${EF_LISTS.map((l, li) => `<ha-expansion-panel class="ef-cons-panel" data-li="${li}" outlined>
         <div class="ef-inner">
-          <div class="ef-hint">Reihenfolge mit den Pfeilen festlegen. Ein Bild hat Vorrang vor dem Symbol.</div>
+          <div class="ef-hint">${l.hint}</div>
           <div class="ef-cons"></div>
-          <button class="ef-add">+ Verbraucher hinzufügen</button>
+          <button class="ef-add">${l.add}</button>
         </div>
-      </ha-expansion-panel>
+      </ha-expansion-panel>`).join('')}
       <div class="ef-hint" style="text-align:right">Energiefluss Card ${EF_VERSION}</div>`;
     const main = document.createElement('ha-form');
     main.hass = this._hass;
@@ -909,28 +1022,32 @@ class EnergieflussCardEditor extends HTMLElement {
     main.computeLabel = (s) => EF_LABELS[s.name] || s.title || s.name;
     main.addEventListener('value-changed', (e) => {
       e.stopPropagation();
-      const v = { ...e.detail.value };
-      v.consumers = this._config.consumers || [];
+      let v = { ...e.detail.value };
       v.type = this._config.type;
+      // Listen bleiben unverändert erhalten
+      EF_LISTS.forEach((l) => { v = efSet(v, l.path, efGet(this._config, l.path)); });
       this._config = v;
       this._fire();
     });
     this._main = main;
     this.querySelector('.ef-main').appendChild(main);
-    this.querySelector('.ef-add').addEventListener('click', () => {
-      const list = [...(this._config.consumers || [])];
-      list.push({ entity: '', name: 'Neuer Verbraucher', icon: 'mdi:flash', threshold: 5 });
-      this._config = { ...this._config, consumers: list };
-      this._openIdx = list.length - 1;
-      this._renderConsumers();
-      this._fire();
+    this._lens = {}; this._openIdx = {};
+    this.querySelectorAll('.ef-cons-panel').forEach((panel) => {
+      const li = +panel.dataset.li, l = EF_LISTS[li];
+      panel.querySelector('.ef-add').addEventListener('click', () => {
+        const list = [...efGet(this._config, l.path), l.item()];
+        this._config = efSet(this._config, l.path, list);
+        this._openIdx[li] = list.length - 1;
+        this._renderList(li);
+        this._fire();
+      });
     });
     this._refresh();
   }
 
-  _panelHeader() {
-    const p = this.querySelector('.ef-cons-panel');
-    if (p) p.header = `Verbraucher (${(this._config.consumers || []).length})`;
+  _panelHeader(li) {
+    const p = this.querySelector(`.ef-cons-panel[data-li="${li}"]`);
+    if (p) p.header = `${EF_LISTS[li].title} (${efGet(this._config, EF_LISTS[li].path).length})`;
   }
 
   _refresh() {
@@ -938,35 +1055,37 @@ class EnergieflussCardEditor extends HTMLElement {
     const data = efMerge(EF_DEFAULTS, this._config);
     delete data.consumers;
     this._main.data = data;
-    const len = (this._config.consumers || []).length;
-    if (len !== this._consLen) this._renderConsumers();
-    else {
-      this.querySelectorAll('.ef-item').forEach((it, i) => {
-        const cs = this._config.consumers[i];
-        it.querySelector('ha-form').data = cs;
-        if (it._setHead) it._setHead(cs);
-      });
-    }
-    this._panelHeader();
+    EF_LISTS.forEach((l, li) => {
+      const list = efGet(this._config, l.path);
+      if (list.length !== this._lens[li]) this._renderList(li);
+      else {
+        this.querySelectorAll(`.ef-cons-panel[data-li="${li}"] .ef-item`).forEach((it, i) => {
+          it.querySelector('ha-form').data = list[i];
+          if (it._setHead) it._setHead(list[i]);
+        });
+      }
+      this._panelHeader(li);
+    });
   }
 
-  _renderConsumers() {
-    const box = this.querySelector('.ef-cons');
+  _renderList(li) {
+    const l = EF_LISTS[li];
+    const box = this.querySelector(`.ef-cons-panel[data-li="${li}"] .ef-cons`);
     if (!box) return;
-    const list = this._config.consumers || [];
-    this._consLen = list.length;
+    const list = efGet(this._config, l.path);
+    this._lens[li] = list.length;
     box.innerHTML = '';
     list.forEach((cs, i) => {
       const item = document.createElement('div');
-      item.className = 'ef-item' + (this._openIdx === i ? ' open' : '');
+      item.className = 'ef-item' + (this._openIdx[li] === i ? ' open' : '');
       item.innerHTML = `<div class="ef-row">
           <div class="ef-title"><div class="ef-name"></div><div class="ef-ent"></div></div>
           <button data-a="up" title="nach oben">&#8593;</button><button data-a="down" title="nach unten">&#8595;</button>
           <button data-a="edit" class="ef-edit" title="bearbeiten">&#9662;</button>
         </div><div class="ef-detail"><div class="ef-btns"><button data-a="del">&#10005; Entfernen</button></div></div>`;
       const setHead = (c) => {
-        item.querySelector('.ef-name').textContent = c?.name || c?.entity || `Verbraucher ${i + 1}`;
-        item.querySelector('.ef-ent').textContent = c?.entity || '';
+        item.querySelector('.ef-name').textContent = c?.name || c?.entity || `${l.title} ${i + 1}`;
+        item.querySelector('.ef-ent').textContent = c?.entity || c?.soc_entity || '';
       };
       setHead(cs);
       item._setHead = setHead;
@@ -974,37 +1093,38 @@ class EnergieflussCardEditor extends HTMLElement {
       item.querySelector('.ef-title').addEventListener('click', toggle);
       item.querySelectorAll('button').forEach((b) => b.addEventListener('click', (ev) => {
         ev.stopPropagation();
-        if (b.dataset.a === 'edit') toggle(); else this._move(i, b.dataset.a);
+        if (b.dataset.a === 'edit') toggle(); else this._move(li, i, b.dataset.a);
       }));
       const f = document.createElement('ha-form');
       f.hass = this._hass;
-      f.schema = EF_CONSUMER_SCHEMA;
+      f.schema = l.schema || EF_CONSUMER_SCHEMA;
       f.data = cs;
       f.computeLabel = (sch) => (sch.name === 'threshold' ? EF_LABELS.threshold_c : (EF_LABELS[sch.name] || sch.title || sch.name));
       f.addEventListener('value-changed', (e) => {
         e.stopPropagation();
-        const l = [...(this._config.consumers || [])];
-        l[i] = e.detail.value;
-        this._config = { ...this._config, consumers: l };
-        setHead(l[i]);
+        const nl = [...efGet(this._config, l.path)];
+        nl[i] = e.detail.value;
+        this._config = efSet(this._config, l.path, nl);
+        setHead(nl[i]);
         this._fire();
       });
       item.querySelector('.ef-detail').insertBefore(f, item.querySelector('.ef-detail .ef-btns'));
       box.appendChild(item);
     });
-    this._openIdx = null;
-    this._panelHeader();
+    this._openIdx[li] = null;
+    this._panelHeader(li);
   }
 
-  _move(i, a) {
-    const l = [...(this._config.consumers || [])];
+  _move(li, i, a) {
+    const l = EF_LISTS[li];
+    const nl = [...efGet(this._config, l.path)];
     let open = i;
-    if (a === 'del') { l.splice(i, 1); open = null; }
-    if (a === 'up' && i > 0) { [l[i - 1], l[i]] = [l[i], l[i - 1]]; open = i - 1; }
-    if (a === 'down' && i < l.length - 1) { [l[i + 1], l[i]] = [l[i], l[i + 1]]; open = i + 1; }
-    this._config = { ...this._config, consumers: l };
-    this._openIdx = open;
-    this._renderConsumers();
+    if (a === 'del') { nl.splice(i, 1); open = null; }
+    if (a === 'up' && i > 0) { [nl[i - 1], nl[i]] = [nl[i], nl[i - 1]]; open = i - 1; }
+    if (a === 'down' && i < nl.length - 1) { [nl[i + 1], nl[i]] = [nl[i], nl[i + 1]]; open = i + 1; }
+    this._config = efSet(this._config, l.path, nl);
+    this._openIdx[li] = open;
+    this._renderList(li);
     this._fire();
   }
 
@@ -1023,6 +1143,7 @@ class EnergieflussCardEditor extends HTMLElement {
         }
         return Object.keys(o).length ? o : undefined;
       }
+      if (Array.isArray(val)) return val.length ? val : undefined;
       if (val === undefined || val === '' || val === null) return undefined;
       if (def !== undefined && JSON.stringify(val) === JSON.stringify(def)) return undefined;
       return val;

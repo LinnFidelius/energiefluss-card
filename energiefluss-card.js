@@ -4,7 +4,7 @@
  * Installation über HACS (Typ Dashboard) oder manuell als JavaScript-Modul (Dashboard-Ressource).
  * Alle Symbole sind eingebettet; Bildwert "ef:<name>" = eingebautes Symbol, sonst Pfad/URL.
  */
-const EF_VERSION = '2.0.0';
+const EF_VERSION = '2.1.0';
 
 // ICONS-START (automatisch erzeugt von tools/embed_icons.py)
 const EF_ICONS = {
@@ -263,6 +263,8 @@ const EF_DEFAULTS = {
   autarky_mode: 'day',
   autarky_entity: '',
   speed: 1,
+  speed_reference: 'auto',
+  speed_max_w: 10000,
   threshold: 20,
   kilo_threshold: 1000,
   decimals_kw: 1,
@@ -285,6 +287,7 @@ const EF_DEFAULTS = {
   },
   consumers_title: 'Verbraucher',
   consumers_open: false,
+  consumers_icon_style: 'same',
   consumers_only_active: true,
   consumers: []
 };
@@ -309,35 +312,42 @@ const EF_STUB = {
 };
 
 // Linien im Koordinatensystem 400 x H; Richtung = Flussrichtung. dy = Höhe des Bands für Volleinspeise-Anlagen
-const EF_BAND = 175;
+// Nebenanlagen sitzen in der oberen Reihe: Volleinspeisung links (Linie ins Netz), angeschlossene PV rechts (Linie in die Haupt-PV)
 const efLayout = (c) => {
   const fis = (c.feed_in.systems || []).filter((x) => x && x.entity);
-  const dy = fis.length ? EF_BAND : 0;
+  const pvx = (c.pv.extra || []).map((x, i) => ({ x, i })).filter((o) => o.x && o.x.entity && o.x.show_node).slice(0, 1);
+  const d = (fis.length || pvx.length) ? 26 : 0;   // mittlere und untere Reihe etwas tiefer, damit oben Platz ist
   const L = {
-    pv_home: `M200 ${145 + dy} V ${262 + dy}`,
-    pv_grid: `M152 ${50 + dy} Q 60 ${50 + dy} 60 ${136 + dy}`,
-    pv_batt: `M248 ${50 + dy} Q 340 ${50 + dy} 340 ${136 + dy}`,
-    grid_batt: `M110 ${180 + dy} H 290`,
-    batt_grid: `M290 ${180 + dy} H 110`,
-    grid_home: `M110 ${200 + dy} Q 180 ${200 + dy} 180 ${262 + dy}`,
-    batt_home: `M290 ${200 + dy} Q 220 ${200 + dy} 220 ${262 + dy}`,
-    home_wb: `M250 ${313 + dy} H 290`
+    pv_home: `M200 145 V ${262 + d}`,
+    pv_grid: `M152 50 Q 60 50 60 ${136 + d}`,
+    pv_batt: `M248 50 Q 340 50 340 ${136 + d}`,
+    grid_batt: `M110 ${180 + d} H 290`,
+    batt_grid: `M290 ${180 + d} H 110`,
+    grid_home: `M110 ${200 + d} Q 180 ${200 + d} 180 ${262 + d}`,
+    batt_home: `M290 ${200 + d} Q 220 ${200 + d} 220 ${262 + d}`,
+    home_wb: `M250 ${313 + d} H 290`
   };
-  // Volleinspeisung: Knoten im Band oben, Linie links am Rand zum Netz
   const nodes = [];
   if (fis.length) {
-    if (c.feed_in.layout === 'separate') {
-      fis.slice(0, 3).forEach((x, i) => {
-        const cx = [45, 135, 225][i];
-        nodes.push({ key: 'fi' + i, x: cx, w: 22, sys: [i] });
-        L['fi' + i] = cx === 45 ? `M45 ${EF_BAND - 14} V ${136 + dy}` : `M${cx} ${EF_BAND - 14} C ${cx} ${EF_BAND + 4}, 45 ${EF_BAND - 4}, 45 ${EF_BAND + 14} V ${136 + dy}`;
+    L.pv_grid = `M152 58 Q 132 58 130 ${104 + d / 2} Q 128 ${144 + d} 104 ${150 + d}`;
+    if (c.feed_in.layout === 'separate' && fis.length <= 2) {
+      const pos = fis.length === 1 ? [[52, 22]] : [[32, 16], [96, 16]];
+      fis.forEach((_, i) => {
+        const [cx, w] = pos[i];
+        nodes.push({ key: 'fi' + i, x: cx, w, sys: [i], kind: 'fi' });
+        L['fi' + i] = cx === 96 ? `M96 ${126} Q 96 ${146 + d} 72 ${140 + d}` : `M${cx} ${w === 16 ? 126 : 134} V ${138 + d}`;
       });
     } else {
-      nodes.push({ key: 'fi0', x: 60, w: 30, sys: fis.map((_, i) => i) });
-      L.fi0 = `M60 ${EF_BAND - 4} V ${136 + dy}`;
+      nodes.push({ key: 'fi0', x: 52, w: 22, sys: fis.map((_, i) => i), kind: 'fi' });
+      L.fi0 = `M52 136 V ${138 + d}`;
     }
   }
-  return { L, dy, H: 420 + dy, fis, nodes };
+  if (pvx.length) {
+    L.pv_batt = `M248 62 Q 270 62 270 ${104 + d / 2} Q 272 ${144 + d} 296 ${150 + d}`;
+    nodes.push({ key: 'px0', x: 348, w: 22, extra: pvx[0].i, kind: 'px' });
+    L.px0 = 'M318 40 H 250';
+  }
+  return { L, H: 420 + d, d, fis, nodes, pvx };
 };
 
 const efMerge = (base, over) => {
@@ -384,7 +394,7 @@ class EnergieflussCard extends HTMLElement {
 
   set hass(hass) {
     this._hass = hass;
-    if (this._config) this._update();
+    if (this._config) { this._update(); this._loadRef(); }
   }
 
   connectedCallback() { this._startLoop(); }
@@ -445,6 +455,10 @@ class EnergieflussCard extends HTMLElement {
         ${efPic(n.image, c.icon_style, n.color || (key === 'grid' ? '#FF9999' : ''))}
         <div class="val"></div><div class="sub"></div><div class="sub2"></div><div class="sub3"></div></div>`;
     const fiNodes = lay.nodes.map((nd) => {
+      if (nd.kind === 'px') {
+        const x = c.pv.extra[nd.extra];
+        return node(nd.key, nd.x / 4, 22, { ...c.pv, ...x, image: x.image || c.pv.image }, nd.w);
+      }
       const sys = lay.fis[nd.sys[0]];
       const n = nd.sys.length > 1 ? c.feed_in : { ...c.feed_in, ...sys, image: sys.image || c.feed_in.image };
       return node(nd.key, nd.x / 4, 22, n, nd.w);
@@ -465,7 +479,7 @@ class EnergieflussCard extends HTMLElement {
         .ci svg.mono { width:22px; height:22px; flex:none; }
         .val { font-size:16px; font-weight:500; white-space:nowrap; color:var(--primary-text-color); line-height:1.3; }
         .val.idle { color:var(--secondary-text-color); }
-        .node.small .val { font-size:14px; } .node.small .sub, .node.small .sub2 { font-size:11px; }
+        .node.small img { width:64%; } .node.small svg.mono { width:40%; margin:8% auto 4%; } .node.small .val { font-size:13px; } .node.small .sub, .node.small .sub2 { font-size:11px; }
         .sub, .sub2, .sub3 { font-size:12px; white-space:nowrap; color:var(--secondary-text-color); line-height:1.35; }
         .sub:empty, .sub2:empty, .sub3:empty { display:none; }
         .chip { display:inline-block; color:#1c1c1c; font-weight:500; padding:0 8px; border-radius:6px; }
@@ -488,6 +502,11 @@ class EnergieflussCard extends HTMLElement {
         .ci .n { font-size:13px; color:var(--primary-text-color); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
         .ci .w { font-size:12px; color:var(--secondary-text-color); }
         .ci.idle { opacity:.5; }
+        .cons.compact .cons-body { grid-template-columns:repeat(3, minmax(0,1fr)); gap:6px; }
+        .cons.compact .ci { padding:6px 8px; gap:6px; border-radius:8px; }
+        .cons.compact .ci ha-icon { --mdc-icon-size:18px; }
+        .cons.compact .ci svg.mono { width:18px; height:18px; }
+        .cons.compact .ci .n { font-size:12px; } .cons.compact .ci .w { font-size:11px; }
         .empty { grid-column:1/-1; font-size:13px; color:var(--secondary-text-color); padding:4px 6px 8px; }
       </style>
       <ha-card>
@@ -496,9 +515,9 @@ class EnergieflussCard extends HTMLElement {
           <svg class="lines" viewBox="0 0 400 ${lay.H}">${lines}</svg>
           <div class="autarky"></div>
           ${c.energy_link ? `<a class="elink" title="Energie-Dashboard öffnen">Energie &#8250;</a>` : ''}
-          ${fiNodes}${node('pv', 50, 12.6 + lay.dy)}${node('grid', 15, 142.8 + lay.dy)}${node('battery', 85, 142.8 + lay.dy)}${node('home', 50, 268.8 + lay.dy)}${node('wallbox', 85, 277.2 + lay.dy)}
+          ${fiNodes}${node('pv', 50, 12.6)}${node('grid', 15, 142.8 + lay.d)}${node('battery', 85, 142.8 + lay.d)}${node('home', 50, 268.8 + lay.d)}${node('wallbox', 85, 277.2 + lay.d)}
         </div>
-        ${c.consumers.length ? `<div class="cons ${this._open ? 'open' : ''}">
+        ${c.consumers.length ? `<div class="cons ${this._open ? 'open' : ''} ${['mono', 'mdi'].includes(c.consumers_icon_style === 'same' ? c.icon_style : c.consumers_icon_style) ? 'compact' : ''}">
           <div class="cons-head"><span><span class="ct">${efEsc(c.consumers_title)}</span><span class="info"></span></span><span class="chev">&#8250;</span></div>
           <div class="cons-body"></div></div>` : ''}
       </ha-card>`;
@@ -521,6 +540,10 @@ class EnergieflussCard extends HTMLElement {
 
   // ---------- Aktionen (tap / hold / double_tap wie in HA üblich) ----------
   _actionCfg(kind, key) {
+    if (kind === 'node' && key.startsWith('px')) {
+      const x = this._config.pv.extra[this._lay.nodes.find((n) => n.key === key).extra];
+      return { entity: x.entity, tap_action: x.tap_action || { action: 'more-info' }, hold_action: x.hold_action || { action: 'none' }, double_tap_action: x.double_tap_action || { action: 'none' } };
+    }
     if (kind === 'node' && key.startsWith('fi')) {
       const nd = this._lay.nodes.find((x) => x.key === key);
       const sys = this._lay.fis[nd.sys[0]];
@@ -612,13 +635,41 @@ class EnergieflussCard extends HTMLElement {
     f.grid_batt = Math.min(Math.max(bc - f.pv_batt, 0), Math.max(imp - f.grid_home, 0));
     f.batt_grid = Math.min(Math.max(bd - f.batt_home, 0), Math.max(exp - f.pv_grid, 0));
     f.home_wb = wb;
-    (this._lay?.nodes || []).forEach((nd) => { f[nd.key] = nd.sys.reduce((a, i) => a + (fiEach[i] || 0), 0); });
+    (this._lay?.nodes || []).forEach((nd) => {
+      f[nd.key] = nd.kind === 'px' ? Math.max(this._watts(c.pv.extra[nd.extra].entity), 0) : nd.sys.reduce((a, i) => a + (fiEach[i] || 0), 0);
+    });
     return { f, pv, imp, exp, bc, bd, home, wb, pvList, pvEach, batts, battEach, fis, fiEach, fi };
   }
 
   _speed(p) {
-    // Einheiten pro Sekunde; logarithmisch, damit große Leistungen nicht rasen
-    return this._config.speed * (2.5 + 3 * Math.log10(p / 100 + 1));
+    // Tempo relativ zum Bezugswert: übliche Höchstleistung der letzten 12 Monate (Langzeitstatistik) oder fester Wert
+    const ref = Math.max((this._config.speed_reference === 'auto' && this._ref) || this._config.speed_max_w || 10000, 500);
+    const r = Math.min(p / ref, 1.2);
+    return this._config.speed * (1.5 + 12 * Math.pow(r, 0.6));
+  }
+
+  // Übliche Höchstwerte aus der HA-Langzeitstatistik (Median der Monatsmaxima je Sensor, davon das Maximum)
+  async _loadRef() {
+    const c = this._config, h = this._hass;
+    if (!h || c.speed_reference !== 'auto' || this._refLoading || (this._refAt && Date.now() - this._refAt < 6 * 3600000)) return;
+    this._refLoading = true;
+    try {
+      const ids = [c.pv.entity, ...(c.pv.extra || []).map((x) => x.entity), c.grid.entity, c.grid.import_entity, c.grid.export_entity,
+        c.battery.charge_entity, c.battery.discharge_entity, c.battery.power_entity, c.home.entity, c.wallbox.entity,
+        ...(c.feed_in.systems || []).map((x) => x.entity)].filter((x) => x && h.states[x]);
+      if (!ids.length) return;
+      const start = new Date(Date.now() - 365 * 86400000).toISOString();
+      const res = await h.callWS({ type: 'recorder/statistics_during_period', start_time: start, period: 'month', statistic_ids: [...new Set(ids)], types: ['max'] });
+      let ref = 0;
+      for (const [id, rows] of Object.entries(res || {})) {
+        const u = (h.states[id]?.attributes?.unit_of_measurement || 'W').toLowerCase();
+        const f = u === 'kw' ? 1000 : u === 'mw' ? 1e6 : 1;
+        const m = rows.map((r) => Math.abs(r.max ?? 0) * f).filter((v) => v > 0).sort((a, b) => a - b);
+        if (m.length) ref = Math.max(ref, m[Math.floor(m.length / 2)]);
+      }
+      if (ref > 0) this._ref = ref;
+      this._refAt = Date.now();
+    } catch (e) { this._refAt = Date.now(); } finally { this._refLoading = false; }
   }
 
   // ---------- Aktualisierung ----------
@@ -632,7 +683,7 @@ class EnergieflussCard extends HTMLElement {
     const col = {
       pv_home: c.pv.color, pv_batt: c.pv.color, pv_grid: c.grid.color_export, batt_grid: c.grid.color_export,
       grid_batt: c.grid.color_import, grid_home: c.grid.color_import, batt_home: c.battery.color, home_wb: c.wallbox.color,
-      fi0: c.grid.color_export, fi1: c.grid.color_export, fi2: c.grid.color_export
+      fi0: c.grid.color_export, fi1: c.grid.color_export, px0: c.pv.color
     };
     const wbVisible = c.wallbox.entity && (c.wallbox.mode === 'always' || (c.wallbox.mode === 'auto' && wb > 0));
     for (const k of Object.keys(this._lines)) {
@@ -650,14 +701,19 @@ class EnergieflussCard extends HTMLElement {
     this._setNode('pv', this._fmtW(pv), pv < c.threshold, pvDay ? 'heute ' + pvDay : '', pvBreak);
     // Volleinspeisung
     (this._lay.nodes || []).forEach((nd) => {
+      if (nd.kind === 'px') {
+        const x = c.pv.extra[nd.extra], w = Math.max(this._watts(x.entity), 0), d = this._fmtState(x.secondary_entity);
+        this._setNode(nd.key, this._fmtW(w), w < c.threshold, efEsc(x.name || 'PV ' + (nd.extra + 2)), d ? 'heute ' + efEsc(d) : '', true);
+        return;
+      }
       const p = nd.sys.reduce((a, i) => a + (fiEach[i] || 0), 0);
       const day = fmtKwh(sumKwh(nd.sys.map((i) => fis[i].secondary_entity).filter(Boolean)));
       if (nd.sys.length > 1) {
         const br = c.feed_in.show_breakdown ? nd.sys.map((i) => `${fis[i].name || 'Anlage ' + (i + 1)} ${kw(fiEach[i])}`).join(' · ') + ' kW' : '';
-        this._setNode(nd.key, this._fmtW(p), p < c.threshold, efEsc(c.feed_in.name) + (day ? ' · heute ' + day : ''), efEsc(br), true);
+        this._setNode(nd.key, this._fmtW(p), p < c.threshold, day ? 'heute ' + day : efEsc(c.feed_in.name), efEsc(br), true);
       } else {
         const sys = fis[nd.sys[0]];
-        this._setNode(nd.key, this._fmtW(p), p < c.threshold, efEsc(sys.name || 'Anlage ' + (nd.sys[0] + 1)), day ? 'heute ' + day : '', true);
+        this._setNode(nd.key, this._fmtW(p), p < c.threshold, efEsc(sys.name || 'Anlage ' + (nd.sys[0] + 1)), day, true);
       }
     });
     // Netz
@@ -758,8 +814,9 @@ class EnergieflussCard extends HTMLElement {
       const active = w >= (cs.threshold ?? 5);
       if (active) { sum += w; count++; }
       if (c.consumers_only_active && !active) return;
-      const pic = cs.image
-        ? efPic(cs.image, c.icon_style)
+      const st = c.consumers_icon_style === 'same' ? c.icon_style : c.consumers_icon_style;
+      const pic = (cs.image && st !== 'mdi')
+        ? efPic(cs.image, st)
         : `<ha-icon icon="${efEsc(cs.icon || 'mdi:flash')}"></ha-icon>`;
       const name = cs.name || this._hass?.states[cs.entity]?.attributes?.friendly_name || cs.entity;
       rows.push(`<div class="ci ${active ? '' : 'idle'}" data-idx="${i}">${pic}<div class="t"><div class="n">${efEsc(name)}</div><div class="w">${this._fmtW(w)}</div></div></div>`);
@@ -803,7 +860,8 @@ const EF_LABELS = {
   icon: 'Symbol (wenn kein Bild)', threshold_c: 'Schwelle (ab hier aktiv)',
   tap_action: 'Tippen', hold_action: 'Halten', double_tap_action: 'Doppeltippen',
   show_breakdown: 'Einzelwerte anzeigen', show_feed_in: 'Volleinspeisung anzeigen', show_total: 'Summe aller Einspeisungen anzeigen',
-  layout: 'Darstellung'
+  layout: 'Darstellung', show_node: 'Als eigener Knoten oben rechts (an Haupt-PV angeschlossen)',
+  speed_reference: 'Bezugswert für das Tempo', speed_max_w: 'Fester Bezugswert', consumers_icon_style: 'Symbolstil der Verbraucher'
 };
 
 const efSub = (title, schema) => ({ type: 'expandable', name: '', flatten: true, title, schema });
@@ -838,6 +896,9 @@ const EF_SCHEMA = [
     ] },
     { type: 'grid', name: '', schema: [
       { name: 'speed', selector: { number: { min: 0.1, max: 5, step: 0.1, mode: 'box' } } },
+      { name: 'speed_reference', selector: { select: { mode: 'dropdown', options: [
+        { value: 'auto', label: 'automatisch (letzte 12 Monate)' }, { value: 'fixed', label: 'fester Wert' }] } } },
+      { name: 'speed_max_w', selector: { number: { min: 500, max: 100000, step: 100, mode: 'box', unit_of_measurement: 'W' } } },
       { name: 'threshold', selector: { number: { min: 0, max: 1000, step: 1, mode: 'box', unit_of_measurement: 'W' } } },
       { name: 'kilo_threshold', selector: { number: { min: 0, max: 100000, step: 100, mode: 'box', unit_of_measurement: 'W' } } },
       { name: 'decimals_kw', selector: { number: { min: 0, max: 3, step: 1, mode: 'box' } } }
@@ -897,6 +958,9 @@ const EF_SCHEMA = [
   { type: 'expandable', name: '', flatten: true, title: 'Verbraucherliste – Allgemein', schema: [
     { name: 'consumers_title', selector: { text: {} } },
     { name: 'consumers_open', selector: { boolean: {} } },
+    { name: 'consumers_icon_style', selector: { select: { mode: 'dropdown', options: [
+      { value: 'same', label: 'wie oben' }, { value: '3d', label: '3D' }, { value: '2d', label: '2D' },
+      { value: 'mono', label: 'Linie (kompakt)' }, { value: 'mdi', label: 'HA-Symbol des Verbrauchers (kompakt)' }] } } },
     { name: 'consumers_only_active', selector: { boolean: {} } }
   ] }
 ];
@@ -904,7 +968,9 @@ const EF_SCHEMA = [
 const EF_NUM = (min, max, step, unit) => ({ number: { min, max, step, mode: 'box', unit_of_measurement: unit } });
 const EF_PV_SCHEMA = [
   { name: 'entity', selector: S },
-  { type: 'grid', name: '', schema: [{ name: 'name', selector: { text: {} } }, { name: 'secondary_entity', selector: S }] }
+  { type: 'grid', name: '', schema: [{ name: 'name', selector: { text: {} } }, { name: 'secondary_entity', selector: S }] },
+  { name: 'show_node', selector: { boolean: {} } },
+  efSub('Bild', [{ name: 'image', selector: EF_IMG }]), efActions()
 ];
 const EF_FI_SCHEMA = [
   { name: 'entity', selector: S },

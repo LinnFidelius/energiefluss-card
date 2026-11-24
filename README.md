@@ -16,8 +16,10 @@ Die Vorschau klappt die Verbraucherliste automatisch auf und wieder zu.
 - Wallbox wahlweise nur beim Laden, immer oder nie, mit Ladestand des Fahrzeugs
 - Einklappbare Verbraucherliste in fester Reihenfolge, nur aktive Verbraucher, mit eigenem Bild oder Symbol
 - Tippen, Halten und Doppeltippen mit den üblichen Home-Assistant-Aktionen
-- Mehrere Anlagen: weitere PV-Anlagen für Eigenverbrauch (summiert, mit Einzelwerten), mehrere Akkus (Leistung summiert, Ladestand nach Kapazität gemittelt) und Volleinspeise-Anlagen mit eigener Linie direkt ins Netz – wahlweise als ein Knoten mit Summe oder ein Knoten je Anlage
+- Tempo der Linien zeigt die Leistung: Bezug ist die übliche Höchstleistung der letzten 12 Monate aus der HA-Langzeitstatistik (oder ein fester Wert)
+- Mehrere Anlagen: weitere PV-Anlagen für Eigenverbrauch (summiert, mit Einzelwerten; eine davon optional als eigener Knoten oben rechts, angeschlossen an die Haupt-PV), mehrere Akkus (Leistung summiert, Ladestand nach Kapazität gemittelt) und Volleinspeise-Anlagen oben links mit eigener Linie direkt ins Netz – wahlweise als ein Knoten mit Summe oder ein Knoten je Anlage (max. 2)
 - Netz zeigt den Hausanschluss, auf Wunsch zusätzlich die Volleinspeisung und die Summe aller Einspeisungen
+- Symbolstil der Verbraucherliste separat wählbar; bei Linie oder HA-Symbol kompakt in drei Spalten
 - Dezenter Link zum Energie-Dashboard (abschaltbar)
 - Symbolstil wählbar: 3D (isometrisch), 2D (flach) oder Linie wie die HA-Icons, Symbole aus [smart-home-icons](https://github.com/LinnFidelius/smart-home-icons)
 - Grafischer Editor, gegliedert nach Allgemein, PV, Netz, Akku, Haus, Wallbox und Verbrauchern
@@ -96,6 +98,7 @@ pv:
     - entity: sensor.pv_garage_power
       name: Garage
       secondary_entity: sensor.pv_garage_today
+      show_node: true   # eigener Knoten, Linie in die Haupt-PV
 battery:
   soc_entity: sensor.akku1_soc
   charge_entity: sensor.akku1_charge

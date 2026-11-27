@@ -4,7 +4,7 @@
  * Installation über HACS (Typ Dashboard) oder manuell als JavaScript-Modul (Dashboard-Ressource).
  * Alle Symbole sind eingebettet; Bildwert "ef:<name>" = eingebautes Symbol, sonst Pfad/URL.
  */
-const EF_VERSION = '2.4.1';
+const EF_VERSION = '2.5.0';
 
 // ICONS-START (automatisch erzeugt von tools/embed_icons.py)
 const EF_ICONS = {
@@ -215,6 +215,7 @@ const EF_DEFAULTS = {
   },
   consumers_title: 'Verbraucher',
   consumers_open: false,
+  consumers_remember: true,
   consumers_icon_style: 'same',
   consumers_only_active: true,
   consumers: []
@@ -333,10 +334,32 @@ class EnergieflussCard extends HTMLElement {
     this._raw = config;
     this._config = efMerge(EF_DEFAULTS, config);
     this._config.consumers = Array.isArray(config.consumers) ? config.consumers : [];
-    if (this._open === null) this._open = !!this._config.consumers_open;
+    if (this._open === null) {
+      // Gemerkten Zustand dieses Geräts (Browser/App) verwenden, sonst den Standard aus der Konfiguration
+      const saved = this._config.consumers_remember ? this._loadOpen() : null;
+      this._open = saved === null ? !!this._config.consumers_open : saved;
+    }
     this._consKey = '';
     this._build();
     if (this._hass) this._update();
+  }
+
+  // Auf-/Zugeklappt je Gerät: liegt im lokalen Speicher des Browsers bzw. der Companion-App.
+  // Schlüssel je Dashboard-Seite und Karte (storage_key, sonst Titel der Verbraucherliste).
+  _openKey() {
+    const c = this._config || {};
+    return 'energiefluss-card:open:' + location.pathname + ':' + (c.storage_key || c.consumers_title || '');
+  }
+
+  _loadOpen() {
+    try {
+      const v = localStorage.getItem(this._openKey());
+      return v === null ? null : v === '1';
+    } catch (e) { return null; }
+  }
+
+  _saveOpen(open) {
+    try { localStorage.setItem(this._openKey(), open ? '1' : '0'); } catch (e) { /* Speicher nicht verfügbar */ }
   }
 
   set hass(hass) {
@@ -486,6 +509,7 @@ class EnergieflussCard extends HTMLElement {
     if (head) head.addEventListener('click', () => {
       this._open = !this._open;
       this.shadowRoot.querySelector('.cons').classList.toggle('open', this._open);
+      if (this._config.consumers_remember) this._saveOpen(this._open);
     });
     const body = this.shadowRoot.querySelector('.cons-body');
     if (body) this._bindGestures(body, (e) => {
@@ -840,7 +864,7 @@ const EF_LABELS = {
   charge_entity: 'Lade-Sensor', discharge_entity: 'Entlade-Sensor', power_entity: 'Kombinierter Leistungs-Sensor (+ = Entladen)',
   capacity_kwh: 'Kapazität (kWh)', min_soc: 'Nutzbar bis SoC (%)', show_runtime: 'Restlaufzeit anzeigen',
   unit: 'Einheit des Sensors', soc_label: 'Bezeichnung Fahrzeug', mode: 'Anzeigen', consumers_title: 'Überschrift',
-  consumers_open: 'Beim Laden aufgeklappt', consumers_only_active: 'Nur aktive Verbraucher zeigen',
+  consumers_open: 'Standard: aufgeklappt (für Geräte ohne gemerkten Zustand)', consumers_remember: 'Auf-/Zugeklappt je Gerät merken', consumers_only_active: 'Nur aktive Verbraucher zeigen',
   icon: 'Symbol (wenn kein Bild)', threshold_c: 'Schwelle (ab hier aktiv)',
   tap_action: 'Tippen', hold_action: 'Halten', double_tap_action: 'Doppeltippen',
   show_breakdown: 'Einzelwerte anzeigen', show_feed_in: 'Volleinspeisung anzeigen', show_total: 'Summe aller Einspeisungen anzeigen',
@@ -942,6 +966,7 @@ const EF_SCHEMA = [
   { type: 'expandable', name: '', flatten: true, title: 'Verbraucherliste – Allgemein', schema: [
     { name: 'consumers_title', selector: { text: {} } },
     { name: 'consumers_open', selector: { boolean: {} } },
+    { name: 'consumers_remember', selector: { boolean: {} } },
     { name: 'consumers_icon_style', selector: { select: { mode: 'dropdown', options: [
       { value: 'same', label: 'wie oben' }, { value: '3d', label: '3D' }, { value: '2d', label: '2D' },
       { value: 'mono', label: 'Linie (kompakt)' }, { value: 'mdi', label: 'HA-Symbol des Verbrauchers (kompakt)' }] } } },

@@ -11,7 +11,7 @@ Die Vorschau klappt die Verbraucherliste automatisch auf und wieder zu.
 
 - Fluss-Berechnung aus PV-, Netz-, Akku- und Haussensoren (PV deckt zuerst das Haus, dann den Akku, der Rest geht ins Netz)
 - Netz: Bezug rot, Einspeisung grün, Vorzeichen umkehrbar oder getrennte Bezug-/Einspeise-Sensoren
-- Akku mit Ladestand, Restlaufzeit („bis 06:40“) aus Kapazität und Mindest-SoC
+- Akku mit Ladestand, Restlaufzeit („bis 06:40“) aus Kapazität und Mindest-SoC; Entladeleistung über die laufende Entladephase gemittelt (Standard max. 60 min, `runtime_window`), Uhrzeit auf 10 min gerundet
 - Autarkie als Tageswert (aus Netzbezug heute und Hausverbrauch heute oder eigenem Sensor), wahlweise live
 - Wallbox wahlweise nur beim Laden, immer oder nie, mit Ladestand des Fahrzeugs
 - Einklappbare Verbraucherliste in fester Reihenfolge, nur aktive Verbraucher, mit eigenem Bild oder Symbol

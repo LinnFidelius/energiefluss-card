@@ -4,7 +4,7 @@
  * Installation über HACS (Typ Dashboard) oder manuell als JavaScript-Modul (Dashboard-Ressource).
  * Alle Symbole sind eingebettet; Bildwert "ef:<name>" = eingebautes Symbol, sonst Pfad/URL.
  */
-const EF_VERSION = '2.6.0';
+const EF_VERSION = '2.7.0';
 
 // ICONS-START (automatisch erzeugt von tools/embed_icons.py)
 const EF_ICONS = {
@@ -204,7 +204,7 @@ const EF_DEFAULTS = {
   },
   battery: {
     soc_entity: '', charge_entity: '', discharge_entity: '', power_entity: '', invert: false,
-    capacity_kwh: 7.78, min_soc: 6, show_runtime: true, name: 'Akku', image: 'ef:akku',
+    capacity_kwh: 7.78, min_soc: 6, show_runtime: true, runtime_window: 60, name: 'Akku', image: 'ef:akku',
     color: '#C6E0B4', show_breakdown: true, extra: []
   },
   feed_in: { layout: 'combined', name: 'Volleinspeisung', image: 'ef:pv', color: '#FFE8A2', show_breakdown: true, systems: [] },
@@ -366,7 +366,7 @@ class EnergieflussCard extends HTMLElement {
 
   set hass(hass) {
     this._hass = hass;
-    if (this._config) { this._update(); this._loadRef(); }
+    if (this._config) { this._update(); this._loadRef(); this._loadRunHist(); }
   }
 
   connectedCallback() { this._startLoop(); }
@@ -660,6 +660,81 @@ class EnergieflussCard extends HTMLElement {
     return this._config.speed * (1.5 + 12 * Math.pow(r, 0.6));
   }
 
+  // ---------- Restlaufzeit Akku ----------
+  // Entladeleistung wird über die laufende Entladephase gemittelt (höchstens runtime_window Minuten),
+  // damit kurze Spitzen (Wasserkocher, Herd) die Anzeige nicht hin- und herspringen lassen.
+  // Verlauf kommt beim Start aus dem HA-Recorder, danach aus den Live-Werten.
+  _runBatts() {
+    const c = this._config, gbCfg = this._lay?.gb ? c.battery.extra[this._lay.gbi] : null;
+    return [c.battery, ...(c.battery.extra || []).filter((x) => x !== gbCfg)]
+      .filter((x) => x && (x.charge_entity || x.discharge_entity || x.power_entity));
+  }
+  _runWin() { return Math.min(Math.max(+this._config.battery.runtime_window || 60, 5), 240) * 60000; }
+
+  async _loadRunHist() {
+    const c = this._config, h = this._hass;
+    if (!h || !c.battery.show_runtime || this._runLoading) return;
+    const rs = this._runS;
+    // neu laden beim Start und nach einer Pause ohne Werte (z. B. App im Hintergrund)
+    if (rs && rs.length && Date.now() - rs[rs.length - 1][0] < 3 * 60000) return;
+    if (this._runTry && Date.now() - this._runTry < 60000) return;
+    this._runTry = Date.now();
+    const bs = this._runBatts();
+    const ids = [...new Set(bs.map((x) => (x.charge_entity || x.discharge_entity) ? x.discharge_entity : x.power_entity).filter((x) => x && h.states[x]))];
+    if (!ids.length) return;
+    this._runLoading = true;
+    try {
+      const start = new Date(Date.now() - this._runWin() - 60000).toISOString();
+      const res = await h.callWS({ type: 'history/history_during_period', start_time: start, entity_ids: ids,
+        minimal_response: true, no_attributes: true, significant_changes_only: false });
+      // je Entität: Stufenfunktion [Zeit, Watt]
+      const ser = {};
+      for (const id of ids) {
+        const u = (h.states[id]?.attributes?.unit_of_measurement || 'W').toLowerCase();
+        const f = u === 'kw' ? 1000 : u === 'mw' ? 1e6 : 1;
+        ser[id] = (res?.[id] || []).map((e) => {
+          const t = e.lu != null ? e.lu * 1000 : e.lc != null ? e.lc * 1000 : Date.parse(e.last_updated || e.last_changed);
+          const v = parseFloat(e.s ?? e.state);
+          return [t, isNaN(v) ? 0 : v * f];
+        }).filter((x) => !isNaN(x[0])).sort((a, b) => a[0] - b[0]);
+      }
+      const times = [...new Set(Object.values(ser).flatMap((a) => a.map((x) => x[0])))].sort((a, b) => a - b);
+      const at = (arr, t) => { let v = 0; for (const x of arr) { if (x[0] > t) break; v = x[1]; } return v; };
+      const out = times.map((t) => [t, bs.reduce((a, x) => {
+        if (x.charge_entity || x.discharge_entity) return a + Math.max(ser[x.discharge_entity] ? at(ser[x.discharge_entity], t) : 0, 0);
+        return a + Math.max((ser[x.power_entity] ? at(ser[x.power_entity], t) : 0) * (x.invert ? -1 : 1), 0);
+      }, 0)]);
+      // Live-Werte, die während des Ladens schon kamen, hinten anhängen
+      const live = (this._runS || []).filter((x) => x[0] > (out.length ? out[out.length - 1][0] : 0));
+      this._runS = [...out, ...live];
+      this._update();
+    } catch (e) { /* ohne Verlauf: Mittelung nur aus Live-Werten */ } finally { this._runLoading = false; }
+  }
+
+  // Live-Wert anhängen und gemittelte Entladeleistung liefern
+  _runRate(bd) {
+    const now = Date.now(), win = this._runWin(), TH = 50, GAP = 5 * 60000;
+    const s = this._runS || (this._runS = []);
+    const last = s[s.length - 1];
+    if (!last || Math.abs(last[1] - bd) > 1 || now - last[0] > 30000) s.push([now, bd]);
+    while (s.length > 2 && s[1][0] < now - win) s.shift();
+    // Beginn der laufenden Entladephase suchen; kurze Unterbrechungen (< 5 min) zählen mit
+    let start = s[s.length - 1][0], gapFrom = null;
+    for (let i = s.length - 1; i >= 0; i--) {
+      const [t, w] = s[i], end = i + 1 < s.length ? s[i + 1][0] : now;
+      if (w >= TH) { start = t; gapFrom = null; continue; }
+      if (gapFrom === null) gapFrom = end;
+      if (gapFrom - t > GAP) break;
+    }
+    start = Math.max(start, now - win);
+    let e = 0, dur = 0;
+    for (let i = 0; i < s.length; i++) {
+      const a = Math.max(s[i][0], start), b = i + 1 < s.length ? s[i + 1][0] : now;
+      if (b > a) { e += s[i][1] * (b - a); dur += b - a; }
+    }
+    return dur > 60000 ? e / dur : bd;
+  }
+
   // Übliche Höchstwerte aus der HA-Langzeitstatistik (Median der Monatsmaxima je Sensor, davon das Maximum)
   async _loadRef() {
     const c = this._config, h = this._hass;
@@ -752,11 +827,13 @@ class EnergieflussCard extends HTMLElement {
     const usable = bInfo.reduce((a, b) => a + (b.has ? Math.max(b.soc - b.min, 0) / 100 * b.cap : 0), 0);
     const bw = Math.max(bc, bd);
     let run = '';
+    const rate = c.battery.show_runtime ? this._runRate(bd) : bd;
     if (c.battery.show_runtime && bd >= 50 && usable > 0) {
-      const h = usable * 1000 / bd;
+      const h = usable * 1000 / Math.max(rate, 50);
       if (h > 24) run = 'reicht über 24 h';
       else {
-        const t = new Date(Date.now() + h * 3600000);
+        // auf 10 Minuten gerundet, damit die Uhrzeit ruhig bleibt
+        const t = new Date(Math.round((Date.now() + h * 3600000) / 600000) * 600000);
         run = 'bis ' + t.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
       }
     }
@@ -874,6 +951,7 @@ const EF_LABELS = {
   color_import: 'Farbe Bezug (Hex)', color_export: 'Farbe Einspeisung (Hex)', soc_entity: 'Ladestand-Sensor (SoC)',
   charge_entity: 'Lade-Sensor', discharge_entity: 'Entlade-Sensor', power_entity: 'Kombinierter Leistungs-Sensor (+ = Entladen)',
   capacity_kwh: 'Kapazität (kWh)', min_soc: 'Nutzbar bis SoC (%)', show_runtime: 'Restlaufzeit anzeigen',
+  runtime_window: 'Restlaufzeit: Mittelwert über (min)',
   unit: 'Einheit des Sensors', soc_label: 'Bezeichnung Fahrzeug', mode: 'Anzeigen', consumers_title: 'Überschrift',
   consumers_open: 'Standard: aufgeklappt (für Geräte ohne gemerkten Zustand)', consumers_remember: 'Auf-/Zugeklappt je Gerät merken', consumers_columns: 'Verbraucher nebeneinander', consumers_only_active: 'Nur aktive Verbraucher zeigen',
   icon: 'Symbol (wenn kein Bild)', threshold_c: 'Schwelle (ab hier aktiv)',
@@ -947,6 +1025,7 @@ const EF_SCHEMA = [
         { name: 'min_soc', selector: { number: { min: 0, max: 100, step: 1, mode: 'box', unit_of_measurement: '%' } } }
       ] },
       { name: 'show_runtime', selector: { boolean: {} } },
+      { name: 'runtime_window', selector: { number: { min: 5, max: 240, step: 5, mode: 'box', unit_of_measurement: 'min' } } },
       { name: 'show_breakdown', selector: { boolean: {} } }
     ]),
     efLook(['color']), efActions()

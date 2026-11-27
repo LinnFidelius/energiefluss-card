@@ -4,7 +4,7 @@
  * Installation über HACS (Typ Dashboard) oder manuell als JavaScript-Modul (Dashboard-Ressource).
  * Alle Symbole sind eingebettet; Bildwert "ef:<name>" = eingebautes Symbol, sonst Pfad/URL.
  */
-const EF_VERSION = '2.5.0';
+const EF_VERSION = '2.5.1';
 
 // ICONS-START (automatisch erzeugt von tools/embed_icons.py)
 const EF_ICONS = {
@@ -345,10 +345,11 @@ class EnergieflussCard extends HTMLElement {
   }
 
   // Auf-/Zugeklappt je Gerät: liegt im lokalen Speicher des Browsers bzw. der Companion-App.
-  // Schlüssel je Dashboard-Seite und Karte (storage_key, sonst Titel der Verbraucherliste).
+  // Schlüssel je Karte (storage_key, sonst Titel der Verbraucherliste), bewusst ohne Adresse der Seite:
+  // Die Adresse kann beim Start der App eine andere sein als später (z. B. Dashboard ohne Ansicht).
   _openKey() {
     const c = this._config || {};
-    return 'energiefluss-card:open:' + location.pathname + ':' + (c.storage_key || c.consumers_title || '');
+    return 'energiefluss-card:open:' + (c.storage_key || c.consumers_title || '');
   }
 
   _loadOpen() {

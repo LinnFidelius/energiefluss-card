@@ -4,7 +4,7 @@
  * Installation über HACS (Typ Dashboard) oder manuell als JavaScript-Modul (Dashboard-Ressource).
  * Alle Symbole sind eingebettet; Bildwert "ef:<name>" = eingebautes Symbol, sonst Pfad/URL.
  */
-const EF_VERSION = '2.5.1';
+const EF_VERSION = '2.6.0';
 
 // ICONS-START (automatisch erzeugt von tools/embed_icons.py)
 const EF_ICONS = {
@@ -216,6 +216,7 @@ const EF_DEFAULTS = {
   consumers_title: 'Verbraucher',
   consumers_open: false,
   consumers_remember: true,
+  consumers_columns: 'auto',
   consumers_icon_style: 'same',
   consumers_only_active: true,
   consumers: []
@@ -488,6 +489,15 @@ class EnergieflussCard extends HTMLElement {
         .cons.compact .ci ha-icon { --mdc-icon-size:18px; }
         .cons.compact .ci svg.mono { width:18px; height:18px; }
         .cons.compact .ci .n { font-size:12px; } .cons.compact .ci .w { font-size:11px; }
+        /* feste Spaltenzahl der Verbraucherliste (Einstellung consumers_columns) */
+        .cons.cols-2 .cons-body { grid-template-columns:repeat(2, minmax(0,1fr)); }
+        .cons.cols-3 .cons-body { grid-template-columns:repeat(3, minmax(0,1fr)); }
+        .cons.cols-4 .cons-body { grid-template-columns:repeat(4, minmax(0,1fr)); gap:4px; }
+        .cons.cols-4 .ci { padding:6px; gap:5px; border-radius:8px; }
+        .cons.cols-4 .ci img { width:22px; height:22px; margin:-1px; }
+        .cons.cols-4 .ci ha-icon { --mdc-icon-size:18px; }
+        .cons.cols-4 .ci svg.mono { width:18px; height:18px; }
+        .cons.cols-4 .ci .n { font-size:11.5px; } .cons.cols-4 .ci .w { font-size:11px; }
         .empty { grid-column:1/-1; font-size:13px; color:var(--secondary-text-color); padding:4px 6px 8px; }
       </style>
       <ha-card>
@@ -498,7 +508,7 @@ class EnergieflussCard extends HTMLElement {
           ${c.energy_link ? `<a class="elink" title="Energie-Dashboard öffnen">Energie &#8250;</a>` : ''}
           ${fiNodes}${node('pv', 50, 12.6)}${node('grid', 15, 142.8 + lay.d)}${node('battery', lay.battX / 4, 142.8 + lay.d, c.battery, lay.battW)}${node('home', 50, 268.8 + lay.d)}${node('wallbox', 85, 277.2 + lay.d)}
         </div>
-        ${c.consumers.length ? `<div class="cons ${this._open ? 'open' : ''} ${['mono', 'mdi'].includes(c.consumers_icon_style === 'same' ? c.icon_style : c.consumers_icon_style) ? 'compact' : ''}">
+        ${c.consumers.length ? `<div class="cons ${this._open ? 'open' : ''} ${['mono', 'mdi'].includes(c.consumers_icon_style === 'same' ? c.icon_style : c.consumers_icon_style) ? 'compact' : ''} ${['2', '3', '4'].includes(String(c.consumers_columns)) ? 'cols-' + c.consumers_columns : ''}">
           <div class="cons-head"><span><span class="ct">${efEsc(c.consumers_title)}</span><span class="info"></span></span><span class="chev">&#8250;</span></div>
           <div class="cons-body"></div></div>` : ''}
       </ha-card>`;
@@ -865,7 +875,7 @@ const EF_LABELS = {
   charge_entity: 'Lade-Sensor', discharge_entity: 'Entlade-Sensor', power_entity: 'Kombinierter Leistungs-Sensor (+ = Entladen)',
   capacity_kwh: 'Kapazität (kWh)', min_soc: 'Nutzbar bis SoC (%)', show_runtime: 'Restlaufzeit anzeigen',
   unit: 'Einheit des Sensors', soc_label: 'Bezeichnung Fahrzeug', mode: 'Anzeigen', consumers_title: 'Überschrift',
-  consumers_open: 'Standard: aufgeklappt (für Geräte ohne gemerkten Zustand)', consumers_remember: 'Auf-/Zugeklappt je Gerät merken', consumers_only_active: 'Nur aktive Verbraucher zeigen',
+  consumers_open: 'Standard: aufgeklappt (für Geräte ohne gemerkten Zustand)', consumers_remember: 'Auf-/Zugeklappt je Gerät merken', consumers_columns: 'Verbraucher nebeneinander', consumers_only_active: 'Nur aktive Verbraucher zeigen',
   icon: 'Symbol (wenn kein Bild)', threshold_c: 'Schwelle (ab hier aktiv)',
   tap_action: 'Tippen', hold_action: 'Halten', double_tap_action: 'Doppeltippen',
   show_breakdown: 'Einzelwerte anzeigen', show_feed_in: 'Volleinspeisung anzeigen', show_total: 'Summe aller Einspeisungen anzeigen',
@@ -968,6 +978,8 @@ const EF_SCHEMA = [
     { name: 'consumers_title', selector: { text: {} } },
     { name: 'consumers_open', selector: { boolean: {} } },
     { name: 'consumers_remember', selector: { boolean: {} } },
+    { name: 'consumers_columns', selector: { select: { mode: 'dropdown', options: [
+      { value: 'auto', label: 'automatisch (2, kompakt 3)' }, { value: '2', label: '2' }, { value: '3', label: '3' }, { value: '4', label: '4' }] } } },
     { name: 'consumers_icon_style', selector: { select: { mode: 'dropdown', options: [
       { value: 'same', label: 'wie oben' }, { value: '3d', label: '3D' }, { value: '2d', label: '2D' },
       { value: 'mono', label: 'Linie (kompakt)' }, { value: 'mdi', label: 'HA-Symbol des Verbrauchers (kompakt)' }] } } },

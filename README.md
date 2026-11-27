@@ -20,7 +20,7 @@ Die Vorschau klappt die Verbraucherliste automatisch auf und wieder zu.
 - Tempo der Linien zeigt die Leistung: Bezug ist die übliche Höchstleistung der letzten 12 Monate aus der HA-Langzeitstatistik (oder ein fester Wert)
 - Mehrere Anlagen: weitere PV-Anlagen für Eigenverbrauch (summiert, mit Einzelwerten; eine davon optional als eigener Knoten oben rechts – mit Linie in die Haupt-PV oder in den Akku, z. B. für eine Garage-PV mit eigener Batterie), mehrere Akkus (Leistung summiert, Ladestand nach Kapazität gemittelt; ein Akku optional getrennt mit eigenem Knoten, z. B. Garage-PV → Garagen-Akku → Haus; Überschuss der Garage-PV fließt ins Haus bzw. Netz, kreuzende Linien werden als Brücke dargestellt) und Volleinspeise-Anlagen oben links mit eigener Linie direkt ins Netz – wahlweise als ein Knoten mit Summe oder ein Knoten je Anlage (max. 2)
 - Netz zeigt den Hausanschluss, auf Wunsch zusätzlich die Volleinspeisung und die Summe aller Einspeisungen
-- Symbolstil der Verbraucherliste separat wählbar; bei Linie oder HA-Symbol kompakt in drei Spalten
+- Symbolstil der Verbraucherliste separat wählbar; bei Linie oder HA-Symbol kompakt in drei Spalten; Spaltenzahl auch fest wählbar (2, 3 oder 4 nebeneinander, `consumers_columns`)
 - Dezenter Link zum Energie-Dashboard (abschaltbar)
 - Symbolstil wählbar: 3D (isometrisch), 2D (flach) oder Linie wie die HA-Icons, Symbole aus [smart-home-icons](https://github.com/LinnFidelius/smart-home-icons)
 - Grafischer Editor, gegliedert nach Allgemein, PV, Netz, Akku, Haus, Wallbox und Verbrauchern

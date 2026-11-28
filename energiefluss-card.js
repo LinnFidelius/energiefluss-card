@@ -213,6 +213,7 @@ const EF_DEFAULTS = {
   wallbox: {
     entity: '', unit: 'kW', soc_entity: '', soc_label: 'Auto', mode: 'auto', name: 'Wallbox',
     show_chargetime: true, capacity_kwh: 0, capacity_entity: '', charge_target_soc: 100, target_entity: '',
+    mode_entity: '', min_power_w: 1400, priority_entity: '',
     image: 'ef:wallbox', color: '#FFCC99'
   },
   consumers_title: 'Verbraucher',
@@ -788,8 +789,13 @@ class EnergieflussCard extends HTMLElement {
     if (need < 0.1) return '';
     const hrs = need * 1000 / Math.max(rate, 100);
     const eta = Date.now() + hrs * 3600000;
-    // überwiegend PV-Ladung: Netzbezug deckt weniger als die Hälfte der Ladeleistung
-    if (imp < rate * 0.5 && pv > 200) {
+    // Lademodus (z. B. aus EVCC): off = keine Anzeige, now = sofort mit voller Leistung,
+    // minpv = PV, bei zu wenig Sonne mit Mindestleistung weiter, pv = nur Überschuss (endet abends)
+    const mRaw = w.mode_entity ? String(h.states[w.mode_entity]?.state || '').toLowerCase().replace(/\s/g, '') : '';
+    const mode = ({ aus: 'off', schnell: 'now', sofort: 'now', fast: 'now', 'min+pv': 'minpv', solar: 'pv' })[mRaw] || mRaw;
+    if (mode === 'off') return '';
+    const pvMode = mode === 'pv' || mode === 'minpv' || (!mode && imp < rate * 0.5 && pv > 200);
+    if (pvMode && mode !== 'now') {
       const set = Date.parse(h.states['sun.sun']?.attributes?.next_setting || '');
       const toSet = !isNaN(set) && set - Date.now() < 18 * 3600000 ? Math.max(set - Date.now(), 0) / 3600000 : null;
       let avail = null;
@@ -801,6 +807,12 @@ class EnergieflussCard extends HTMLElement {
         if (toSet !== null) avail = Math.min(avail, rate / 1000 * toSet);
       } else if (toSet !== null && eta > set) avail = rate / 1000 * toSet * 0.5;
       if (avail !== null && avail < need) {
+        if (mode === 'minpv' && toSet !== null) {
+          // Rest nach Sonnenuntergang mit Mindestleistung
+          const t2 = set + (need - avail) * 1000 / Math.max(+w.min_power_w || 1400, 100) * 3600000;
+          if (t2 - Date.now() > 24 * 3600000) return 'voll in über 24 h';
+          return (target < 100 ? `${Math.round(target)} % ` : 'voll ') + 'ca. ' + this._hm(this._steady('wb', Math.round(t2 / 600000) * 600000));
+        }
         const reach = Math.min(Math.max(Math.floor((soc + avail / cap * 100) / 5) * 5, Math.round(soc)), target);
         return `heute ca. ${reach} %`;
       }
@@ -964,8 +976,10 @@ class EnergieflussCard extends HTMLElement {
     if (wbVisible) {
       const wsoc = c.wallbox.soc_entity ? this._hass.states[c.wallbox.soc_entity]?.state : null;
       const wTxt = (wsoc !== null && wsoc !== undefined && !isNaN(parseFloat(wsoc))) ? `${efEsc(c.wallbox.soc_label)} ${Math.round(parseFloat(wsoc))} %` : '';
-      const bt = Math.min(Math.max(+c.battery.charge_target_soc || 100, 1), 100);
-      const battNeed = bc >= 50 ? bInfo.reduce((a, x) => a + (x.has ? Math.max(bt - x.soc, 0) / 100 * x.cap : 0), 0) : 0;
+      // Hausakku hat nur bis zur Prioritätsgrenze Vorrang (z. B. EVCC „Haus hat Priorität“), sonst bis zum Ladeziel
+      const prS = c.wallbox.priority_entity ? parseFloat(this._hass.states[c.wallbox.priority_entity]?.state) : NaN;
+      const bt = !isNaN(prS) ? Math.min(Math.max(prS, 0), 100) : Math.min(Math.max(+c.battery.charge_target_soc || 100, 1), 100);
+      const battNeed = (bc >= 50 || !isNaN(prS)) ? bInfo.reduce((a, x) => a + (x.has ? Math.max(bt - x.soc, 0) / 100 * x.cap : 0), 0) : 0;
       const cTxt = this._runOn() ? this._carText(wb, home, imp, pv, battNeed) : '';
       this._setNode('wallbox', this._fmtW(wb), wb < c.threshold, wTxt, efEsc(cTxt), true);
     }
@@ -1064,7 +1078,9 @@ const EF_LABELS = {
   charge_entity: 'Lade-Sensor', discharge_entity: 'Entlade-Sensor', power_entity: 'Kombinierter Leistungs-Sensor (+ = Entladen)',
   capacity_kwh: 'Kapazität (kWh)', min_soc: 'Nutzbar bis SoC (%)', show_runtime: 'Restlaufzeit anzeigen',
   runtime_window: 'Mittelwert über (min, Restlauf- und Ladezeit)',
-  show_chargetime: 'Ladezeit anzeigen (voll um …)', capacity_entity: 'Kapazität aus Sensor (optional, kWh)', target_entity: 'Ladeziel aus Sensor (optional, %)', charge_target_soc: 'Ladeziel (%)', forecast_entity: 'PV-Prognose Resttag heute (optional, kWh)',
+  show_chargetime: 'Ladezeit anzeigen (voll um …)', capacity_entity: 'Kapazität aus Sensor (optional, kWh)', target_entity: 'Ladeziel aus Sensor (optional, %)',
+  mode_entity: 'Lademodus (optional, z. B. EVCC: off/now/minpv/pv)', min_power_w: 'Mindestleistung bei Min+PV',
+  priority_entity: 'Hausakku hat Vorrang bis (optional, %, z. B. EVCC)', charge_target_soc: 'Ladeziel (%)', forecast_entity: 'PV-Prognose Resttag heute (optional, kWh)',
   unit: 'Einheit des Sensors', soc_label: 'Bezeichnung Fahrzeug', mode: 'Anzeigen', consumers_title: 'Überschrift',
   consumers_open: 'Standard: aufgeklappt (für Geräte ohne gemerkten Zustand)', consumers_remember: 'Auf-/Zugeklappt je Gerät merken', consumers_columns: 'Verbraucher nebeneinander', consumers_only_active: 'Nur aktive Verbraucher zeigen',
   icon: 'Symbol (wenn kein Bild)', threshold_c: 'Schwelle (ab hier aktiv)',
@@ -1166,7 +1182,10 @@ const EF_SCHEMA = [
       { name: 'capacity_kwh', selector: { number: { min: 0, max: 250, step: 0.1, mode: 'box', unit_of_measurement: 'kWh' } } },
       { name: 'capacity_entity', selector: S },
       { name: 'charge_target_soc', selector: { number: { min: 1, max: 100, step: 1, mode: 'box', unit_of_measurement: '%' } } },
-      { name: 'target_entity', selector: S }
+      { name: 'target_entity', selector: S },
+      { name: 'mode_entity', selector: { entity: {} } },
+      { name: 'min_power_w', selector: { number: { min: 100, max: 22000, step: 100, mode: 'box', unit_of_measurement: 'W' } } },
+      { name: 'priority_entity', selector: { entity: {} } }
     ]),
     efSub('Anzeige', [
       { name: 'mode', selector: { select: { mode: 'dropdown', options: [

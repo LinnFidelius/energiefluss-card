@@ -4,7 +4,7 @@
  * Installation über HACS (Typ Dashboard) oder manuell als JavaScript-Modul (Dashboard-Ressource).
  * Alle Symbole sind eingebettet; Bildwert "ef:<name>" = eingebautes Symbol, sonst Pfad/URL.
  */
-const EF_VERSION = '2.7.0';
+const EF_VERSION = '2.8.0';
 
 // ICONS-START (automatisch erzeugt von tools/embed_icons.py)
 const EF_ICONS = {
@@ -204,7 +204,8 @@ const EF_DEFAULTS = {
   },
   battery: {
     soc_entity: '', charge_entity: '', discharge_entity: '', power_entity: '', invert: false,
-    capacity_kwh: 7.78, min_soc: 6, show_runtime: true, runtime_window: 60, name: 'Akku', image: 'ef:akku',
+    capacity_kwh: 7.78, min_soc: 6, show_runtime: true, runtime_window: 60,
+    show_chargetime: true, charge_target_soc: 100, forecast_entity: '', name: 'Akku', image: 'ef:akku',
     color: '#C6E0B4', show_breakdown: true, extra: []
   },
   feed_in: { layout: 'combined', name: 'Volleinspeisung', image: 'ef:pv', color: '#FFE8A2', show_breakdown: true, systems: [] },
@@ -660,27 +661,30 @@ class EnergieflussCard extends HTMLElement {
     return this._config.speed * (1.5 + 12 * Math.pow(r, 0.6));
   }
 
-  // ---------- Restlaufzeit Akku ----------
-  // Entladeleistung wird über die laufende Entladephase gemittelt (höchstens runtime_window Minuten),
-  // damit kurze Spitzen (Wasserkocher, Herd) die Anzeige nicht hin- und herspringen lassen.
+  // ---------- Restlaufzeit und Ladezeit Akku ----------
+  // Entlade- und Ladeleistung werden je über die laufende Phase gemittelt (höchstens runtime_window Minuten),
+  // damit kurze Spitzen (Wasserkocher, Herd, Wolken) die Anzeige nicht hin- und herspringen lassen.
   // Verlauf kommt beim Start aus dem HA-Recorder, danach aus den Live-Werten.
+  // Reihen: d = Entladen, c = Laden, pv = PV-Leistung (nur live, für den PV-Anteil beim Laden).
   _runBatts() {
     const c = this._config, gbCfg = this._lay?.gb ? c.battery.extra[this._lay.gbi] : null;
     return [c.battery, ...(c.battery.extra || []).filter((x) => x !== gbCfg)]
       .filter((x) => x && (x.charge_entity || x.discharge_entity || x.power_entity));
   }
   _runWin() { return Math.min(Math.max(+this._config.battery.runtime_window || 60, 5), 240) * 60000; }
+  _runOn() { const b = this._config.battery; return !!(b.show_runtime || b.show_chargetime); }
 
   async _loadRunHist() {
     const c = this._config, h = this._hass;
-    if (!h || !c.battery.show_runtime || this._runLoading) return;
-    const rs = this._runS;
+    if (!h || !this._runOn() || this._runLoading) return;
+    const rs = this._ser?.d;
     // neu laden beim Start und nach einer Pause ohne Werte (z. B. App im Hintergrund)
     if (rs && rs.length && Date.now() - rs[rs.length - 1][0] < 3 * 60000) return;
     if (this._runTry && Date.now() - this._runTry < 60000) return;
     this._runTry = Date.now();
     const bs = this._runBatts();
-    const ids = [...new Set(bs.map((x) => (x.charge_entity || x.discharge_entity) ? x.discharge_entity : x.power_entity).filter((x) => x && h.states[x]))];
+    const ids = [...new Set(bs.flatMap((x) => (x.charge_entity || x.discharge_entity) ? [x.discharge_entity, x.charge_entity] : [x.power_entity])
+      .filter((x) => x && h.states[x]))];
     if (!ids.length) return;
     this._runLoading = true;
     try {
@@ -699,26 +703,32 @@ class EnergieflussCard extends HTMLElement {
         }).filter((x) => !isNaN(x[0])).sort((a, b) => a[0] - b[0]);
       }
       const times = [...new Set(Object.values(ser).flatMap((a) => a.map((x) => x[0])))].sort((a, b) => a - b);
-      const at = (arr, t) => { let v = 0; for (const x of arr) { if (x[0] > t) break; v = x[1]; } return v; };
-      const out = times.map((t) => [t, bs.reduce((a, x) => {
-        if (x.charge_entity || x.discharge_entity) return a + Math.max(ser[x.discharge_entity] ? at(ser[x.discharge_entity], t) : 0, 0);
-        return a + Math.max((ser[x.power_entity] ? at(ser[x.power_entity], t) : 0) * (x.invert ? -1 : 1), 0);
-      }, 0)]);
-      // Live-Werte, die während des Ladens schon kamen, hinten anhängen
-      const live = (this._runS || []).filter((x) => x[0] > (out.length ? out[out.length - 1][0] : 0));
-      this._runS = [...out, ...live];
+      const at = (arr, t) => { if (!arr) return 0; let v = 0; for (const x of arr) { if (x[0] > t) break; v = x[1]; } return v; };
+      const sum = (t, dir) => bs.reduce((a, x) => {
+        if (x.charge_entity || x.discharge_entity) return a + Math.max(at(ser[dir === 'd' ? x.discharge_entity : x.charge_entity], t), 0);
+        const b = at(ser[x.power_entity], t) * (x.invert ? -1 : 1);
+        return a + Math.max(dir === 'd' ? b : -b, 0);
+      }, 0);
+      this._ser = this._ser || {};
+      for (const k of ['d', 'c']) {
+        const out = times.map((t) => [t, sum(t, k)]);
+        // Live-Werte, die während des Ladens schon kamen, hinten anhängen
+        const live = (this._ser[k] || []).filter((x) => x[0] > (out.length ? out[out.length - 1][0] : 0));
+        this._ser[k] = [...out, ...live];
+      }
       this._update();
     } catch (e) { /* ohne Verlauf: Mittelung nur aus Live-Werten */ } finally { this._runLoading = false; }
   }
 
-  // Live-Wert anhängen und gemittelte Entladeleistung liefern
-  _runRate(bd) {
+  // Live-Wert an Reihe k anhängen und den Mittelwert der laufenden Phase liefern
+  _rate(k, v) {
     const now = Date.now(), win = this._runWin(), TH = 50, GAP = 5 * 60000;
-    const s = this._runS || (this._runS = []);
+    this._ser = this._ser || {};
+    const s = this._ser[k] || (this._ser[k] = []);
     const last = s[s.length - 1];
-    if (!last || Math.abs(last[1] - bd) > 1 || now - last[0] > 30000) s.push([now, bd]);
+    if (!last || Math.abs(last[1] - v) > 1 || now - last[0] > 30000) s.push([now, v]);
     while (s.length > 2 && s[1][0] < now - win) s.shift();
-    // Beginn der laufenden Entladephase suchen; kurze Unterbrechungen (< 5 min) zählen mit
+    // Beginn der laufenden Phase suchen; kurze Unterbrechungen (< 5 min) zählen mit
     let start = s[s.length - 1][0], gapFrom = null;
     for (let i = s.length - 1; i >= 0; i--) {
       const [t, w] = s[i], end = i + 1 < s.length ? s[i + 1][0] : now;
@@ -732,7 +742,56 @@ class EnergieflussCard extends HTMLElement {
       const a = Math.max(s[i][0], start), b = i + 1 < s.length ? s[i + 1][0] : now;
       if (b > a) { e += s[i][1] * (b - a); dur += b - a; }
     }
-    return dur > 60000 ? e / dur : bd;
+    return dur > 60000 ? e / dur : v;
+  }
+
+  // Angezeigte Uhrzeit beruhigen: kleine Abweichungen (< 20 min) übergehen,
+  // größere erst übernehmen, wenn sie 3 Minuten lang bestehen.
+  _steady(k, t) {
+    const now = Date.now(), st = (this._stdy = this._stdy || {})[k];
+    if (!st || now - st.seen > 10 * 60000) { this._stdy[k] = { t, seen: now, diff: null }; return t; }
+    st.seen = now;
+    if (Math.abs(t - st.t) < 20 * 60000) { st.diff = null; return st.t; }
+    if (!st.diff) st.diff = now;
+    if (now - st.diff >= 3 * 60000) { st.t = t; st.diff = null; }
+    return st.t;
+  }
+  _hm(t) { return new Date(t).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }); }
+
+  // Ladezeit bis zum Ziel-Ladestand. Beim Laden aus PV wird geprüft, ob die Sonne dafür noch reicht:
+  // mit PV-Prognose (Resttag heute) über den PV-Anteil, der gerade im Akku landet, sonst über den Sonnenuntergang.
+  _chargeText(bInfo, bc, pv) {
+    const c = this._config, b = c.battery;
+    const rate = this._rate('c', bc), pvAvg = this._rate('pv', pv);
+    if (!b.show_chargetime || bc < 50) return '';
+    const target = Math.min(Math.max(+b.charge_target_soc || 100, 1), 100);
+    const need = bInfo.reduce((a, x) => a + (x.has ? Math.max(target - x.soc, 0) / 100 * x.cap : 0), 0); // kWh
+    const capSum = bInfo.reduce((a, x) => a + (x.has ? x.cap : 0), 0);
+    if (capSum <= 0 || need < 0.05) return '';
+    const h = need * 1000 / Math.max(rate, 50);
+    const eta = Date.now() + h * 3600000;
+    const fromPv = pvAvg >= rate * 0.5;
+    if (fromPv) {
+      // verfügbare PV-Energie für den Akku bis zum Abend schätzen
+      let avail = null;
+      const fc = b.forecast_entity ? this._hass.states[b.forecast_entity] : null;
+      if (fc && !isNaN(parseFloat(fc.state))) {
+        const u = (fc.attributes?.unit_of_measurement || 'kWh').toLowerCase();
+        const kwh = parseFloat(fc.state) / (u === 'wh' ? 1000 : u === 'mwh' ? 0.001 : 1);
+        avail = kwh * Math.min(rate / Math.max(pvAvg, 1), 1);
+      } else {
+        const set = Date.parse(this._hass.states['sun.sun']?.attributes?.next_setting || '');
+        if (!isNaN(set) && set - Date.now() < 18 * 3600000 && eta > set) avail = rate / 1000 * Math.max(set - Date.now(), 0) / 3600000 * 0.5;
+      }
+      if (avail !== null && avail < need) {
+        const now = bInfo.reduce((a, x) => a + (x.has ? x.soc * x.cap : 0), 0) / capSum;
+        const reach = Math.min(Math.max(Math.floor((now + avail / capSum * 100) / 5) * 5, Math.round(now)), target);
+        return `heute ca. ${reach} %`;
+      }
+    }
+    if (h > 24) return 'voll in über 24 h';
+    const t = this._steady('c', Math.round(eta / 600000) * 600000);
+    return (target < 100 ? `${target} % ` : 'voll ') + 'ca. ' + this._hm(t);
   }
 
   // Übliche Höchstwerte aus der HA-Langzeitstatistik (Median der Monatsmaxima je Sensor, davon das Maximum)
@@ -827,16 +886,14 @@ class EnergieflussCard extends HTMLElement {
     const usable = bInfo.reduce((a, b) => a + (b.has ? Math.max(b.soc - b.min, 0) / 100 * b.cap : 0), 0);
     const bw = Math.max(bc, bd);
     let run = '';
-    const rate = c.battery.show_runtime ? this._runRate(bd) : bd;
+    const rate = this._runOn() ? this._rate('d', bd) : bd;
     if (c.battery.show_runtime && bd >= 50 && usable > 0) {
       const h = usable * 1000 / Math.max(rate, 50);
       if (h > 24) run = 'reicht über 24 h';
-      else {
-        // auf 10 Minuten gerundet, damit die Uhrzeit ruhig bleibt
-        const t = new Date(Math.round((Date.now() + h * 3600000) / 600000) * 600000);
-        run = 'bis ' + t.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
-      }
+      else run = 'bis ' + this._hm(this._steady('d', Math.round((Date.now() + h * 3600000) / 600000) * 600000));
     }
+    const chg = this._runOn() ? this._chargeText(bInfo, bc, pv) : '';
+    if (!run) run = chg;
     const chip = capSum > 0 ? `<span class="chip" style="background:${c.battery.color}">${Math.round(soc)} %</span>` : '';
     this._setNode('battery', this._fmtW(bw), bw < c.threshold, chip, efEsc(run), true);
     r.getElementById('n-battery').querySelector('.sub3').textContent = (batts.length > 1 && c.battery.show_breakdown)
@@ -951,7 +1008,8 @@ const EF_LABELS = {
   color_import: 'Farbe Bezug (Hex)', color_export: 'Farbe Einspeisung (Hex)', soc_entity: 'Ladestand-Sensor (SoC)',
   charge_entity: 'Lade-Sensor', discharge_entity: 'Entlade-Sensor', power_entity: 'Kombinierter Leistungs-Sensor (+ = Entladen)',
   capacity_kwh: 'Kapazität (kWh)', min_soc: 'Nutzbar bis SoC (%)', show_runtime: 'Restlaufzeit anzeigen',
-  runtime_window: 'Restlaufzeit: Mittelwert über (min)',
+  runtime_window: 'Mittelwert über (min, Restlauf- und Ladezeit)',
+  show_chargetime: 'Ladezeit anzeigen (voll um …)', charge_target_soc: 'Ladeziel (%)', forecast_entity: 'PV-Prognose Resttag heute (optional, kWh)',
   unit: 'Einheit des Sensors', soc_label: 'Bezeichnung Fahrzeug', mode: 'Anzeigen', consumers_title: 'Überschrift',
   consumers_open: 'Standard: aufgeklappt (für Geräte ohne gemerkten Zustand)', consumers_remember: 'Auf-/Zugeklappt je Gerät merken', consumers_columns: 'Verbraucher nebeneinander', consumers_only_active: 'Nur aktive Verbraucher zeigen',
   icon: 'Symbol (wenn kein Bild)', threshold_c: 'Schwelle (ab hier aktiv)',
@@ -1019,12 +1077,17 @@ const EF_SCHEMA = [
       { name: 'soc_entity', selector: S }, { name: 'charge_entity', selector: S }, { name: 'discharge_entity', selector: S },
       { name: 'power_entity', selector: S }, { name: 'invert', selector: { boolean: {} } }
     ]),
-    efSub('Akku-Daten und Restlaufzeit', [
+    efSub('Akku-Daten, Restlauf- und Ladezeit', [
       { type: 'grid', name: '', schema: [
         { name: 'capacity_kwh', selector: { number: { min: 0, max: 100, step: 0.01, mode: 'box', unit_of_measurement: 'kWh' } } },
         { name: 'min_soc', selector: { number: { min: 0, max: 100, step: 1, mode: 'box', unit_of_measurement: '%' } } }
       ] },
       { name: 'show_runtime', selector: { boolean: {} } },
+      { name: 'show_chargetime', selector: { boolean: {} } },
+      { type: 'grid', name: '', schema: [
+        { name: 'charge_target_soc', selector: { number: { min: 1, max: 100, step: 1, mode: 'box', unit_of_measurement: '%' } } },
+        { name: 'forecast_entity', selector: S }
+      ] },
       { name: 'runtime_window', selector: { number: { min: 5, max: 240, step: 5, mode: 'box', unit_of_measurement: 'min' } } },
       { name: 'show_breakdown', selector: { boolean: {} } }
     ]),

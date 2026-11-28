@@ -810,7 +810,7 @@ class EnergieflussCard extends HTMLElement {
     }
     // günstiges Netzladen aktiv: lädt aus dem Netz wie „sofort“
     if (w.grid_cost_entity && isOn(w.grid_cost_entity)) mode = 'now';
-    // „Dauerhaft laden“ / „Mit min. laden“: bei PV-Laden ohne Sonne mit Mindestleistung weiter
+    // „Dauerhaft laden“ / „Mit min. laden“ (EVCC: off / on / once = nur dieser Ladevorgang): bei PV-Laden ohne Sonne mit Mindestleistung weiter
     if (mode === 'pv' && w.always_entity && isOn(w.always_entity)) mode = 'minpv';
     // Sonnenanteil (%): 0 = lädt voll aus dem Netz, sonst wird jede kWh PV um den Netzanteil ergänzt
     const shS = parseFloat(st(w.solar_share_entity));

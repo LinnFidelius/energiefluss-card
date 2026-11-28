@@ -4,7 +4,7 @@
  * Installation über HACS (Typ Dashboard) oder manuell als JavaScript-Modul (Dashboard-Ressource).
  * Alle Symbole sind eingebettet; Bildwert "ef:<name>" = eingebautes Symbol, sonst Pfad/URL.
  */
-const EF_VERSION = '2.10.1';
+const EF_VERSION = '2.11.0';
 
 // ICONS-START (automatisch erzeugt von tools/embed_icons.py)
 const EF_ICONS = {
@@ -214,6 +214,8 @@ const EF_DEFAULTS = {
     entity: '', unit: 'kW', soc_entity: '', soc_label: 'Auto', mode: 'auto', name: 'Wallbox',
     show_chargetime: true, capacity_kwh: 0, capacity_entity: '', charge_target_soc: 100, target_entity: '',
     mode_entity: '', min_power_w: 1400, priority_entity: '',
+    always_entity: '', solar_share_entity: '', min_current_entity: '', phases_entity: '', grid_cost_entity: '',
+    plan_active_entity: '', plan_end_entity: '',
     image: 'ef:wallbox', color: '#FFCC99'
   },
   consumers_title: 'Verbraucher',
@@ -795,8 +797,28 @@ class EnergieflussCard extends HTMLElement {
     // „Smart“ (EVCC) lädt aus PV-Überschuss wie „pv“; unbekannte Modi werden wie ohne Modus behandelt (Erkennung über den Netzbezug)
     const known = { off: 'off', now: 'now', minpv: 'minpv', pv: 'pv', aus: 'off', schnell: 'now', sofort: 'now', fast: 'now',
       'min+pv': 'minpv', solar: 'pv', smart: 'pv' };
-    const mode = known[mRaw] || '';
+    let mode = known[mRaw] || '';
     if (mode === 'off') return '';
+    const st = (id) => (id ? h.states[id]?.state : undefined);
+    const isOn = (id) => { const v = String(st(id) ?? '').toLowerCase().trim();
+      return !!v && !['off', 'aus', 'false', '0', 'none', 'unknown', 'unavailable', 'nein', 'no'].includes(v); };
+    const fmt = (t) => (target < 100 ? `${Math.round(target)} % ` : 'voll ') + 'ca. ' + this._hm(this._steady('wb', Math.round(t / 600000) * 600000));
+    // Ladeplan aktiv (z. B. EVCC): geplantes Ende anzeigen
+    if (w.plan_active_entity && isOn(w.plan_active_entity)) {
+      const pe = Date.parse(st(w.plan_end_entity) || '');
+      if (!isNaN(pe) && pe > Date.now()) return 'Plan ' + fmt(pe);
+    }
+    // günstiges Netzladen aktiv: lädt aus dem Netz wie „sofort“
+    if (w.grid_cost_entity && isOn(w.grid_cost_entity)) mode = 'now';
+    // „Dauerhaft laden“ / „Mit min. laden“: bei PV-Laden ohne Sonne mit Mindestleistung weiter
+    if (mode === 'pv' && w.always_entity && isOn(w.always_entity)) mode = 'minpv';
+    // Sonnenanteil (%): 0 = lädt voll aus dem Netz, sonst wird jede kWh PV um den Netzanteil ergänzt
+    const shS = parseFloat(st(w.solar_share_entity));
+    const share = !isNaN(shS) ? Math.min(Math.max(shS, 0), 100) / 100 : 1;
+    if (share === 0 && (mode === 'pv' || mode === 'minpv')) mode = 'now';
+    // Mindestleistung aus Mindeststrom × Phasen × 230 V, sonst fester Wert
+    const mA = parseFloat(st(w.min_current_entity)), ph = parseFloat(st(w.phases_entity));
+    const minP = !isNaN(mA) && mA > 0 ? mA * 230 * (!isNaN(ph) && ph > 0 ? ph : 1) : +w.min_power_w || 1400;
     const pvMode = mode === 'pv' || mode === 'minpv' || (!mode && imp < rate * 0.5 && pv > 200);
     if (pvMode && mode !== 'now') {
       const set = Date.parse(h.states['sun.sun']?.attributes?.next_setting || '');
@@ -806,23 +828,22 @@ class EnergieflussCard extends HTMLElement {
       if (fc && !isNaN(parseFloat(fc.state))) {
         const u = (fc.attributes?.unit_of_measurement || 'kWh').toLowerCase();
         const kwh = parseFloat(fc.state) / (u === 'wh' ? 1000 : u === 'mwh' ? 0.001 : 1);
-        avail = Math.max(kwh - homeAvg / 1000 * (toSet ?? 0) - battNeed, 0);
+        avail = Math.max(kwh - homeAvg / 1000 * (toSet ?? 0) - battNeed, 0) / share;
         if (toSet !== null) avail = Math.min(avail, rate / 1000 * toSet);
       } else if (toSet !== null && eta > set) avail = rate / 1000 * toSet * 0.5;
       if (avail !== null && avail < need) {
         if (mode === 'minpv' && toSet !== null) {
           // Rest nach Sonnenuntergang mit Mindestleistung
-          const t2 = set + (need - avail) * 1000 / Math.max(+w.min_power_w || 1400, 100) * 3600000;
+          const t2 = set + (need - avail) * 1000 / Math.max(minP, 100) * 3600000;
           if (t2 - Date.now() > 24 * 3600000) return 'voll in über 24 h';
-          return (target < 100 ? `${Math.round(target)} % ` : 'voll ') + 'ca. ' + this._hm(this._steady('wb', Math.round(t2 / 600000) * 600000));
+          return fmt(t2);
         }
         const reach = Math.min(Math.max(Math.floor((soc + avail / cap * 100) / 5) * 5, Math.round(soc)), target);
         return `heute ca. ${reach} %`;
       }
     }
     if (hrs > 24) return 'voll in über 24 h';
-    const t = this._steady('wb', Math.round(eta / 600000) * 600000);
-    return (target < 100 ? `${Math.round(target)} % ` : 'voll ') + 'ca. ' + this._hm(t);
+    return fmt(eta);
   }
 
   // Ladezeit bis zum Ziel-Ladestand. Beim Laden aus PV wird geprüft, ob die Sonne dafür noch reicht:
@@ -1082,8 +1103,11 @@ const EF_LABELS = {
   capacity_kwh: 'Kapazität (kWh)', min_soc: 'Nutzbar bis SoC (%)', show_runtime: 'Restlaufzeit anzeigen',
   runtime_window: 'Mittelwert über (min, Restlauf- und Ladezeit)',
   show_chargetime: 'Ladezeit anzeigen (voll um …)', capacity_entity: 'Kapazität aus Sensor (optional, kWh)', target_entity: 'Ladeziel aus Sensor (optional, %)',
-  mode_entity: 'Lademodus (optional, z. B. EVCC: off/now/minpv/pv)', min_power_w: 'Mindestleistung bei Min+PV',
-  priority_entity: 'Hausakku hat Vorrang bis (optional, %, z. B. EVCC)', charge_target_soc: 'Ladeziel (%)', forecast_entity: 'PV-Prognose Resttag heute (optional, kWh)',
+  mode_entity: 'Lademodus (Aus / Smart / Schnell)', min_power_w: 'Mindestleistung (wenn kein Mindeststrom-Sensor)',
+  always_entity: 'Dauerhaft laden / Mit min. laden', solar_share_entity: 'Sonnenanteil (%)', min_current_entity: 'Mindeststrom (A)',
+  phases_entity: 'Phasen in Verwendung', grid_cost_entity: 'Günstiges Netzladen aktiv', plan_active_entity: 'Ladeplan aktiv',
+  plan_end_entity: 'Ladeplan: voraussichtliches Ende',
+  priority_entity: 'Hausakku hat Vorrang bis (%)', charge_target_soc: 'Ladeziel (%)', forecast_entity: 'PV-Prognose Resttag heute (optional, kWh)',
   unit: 'Einheit des Sensors', soc_label: 'Bezeichnung Fahrzeug', mode: 'Anzeigen', consumers_title: 'Überschrift',
   consumers_open: 'Standard: aufgeklappt (für Geräte ohne gemerkten Zustand)', consumers_remember: 'Auf-/Zugeklappt je Gerät merken', consumers_columns: 'Verbraucher nebeneinander', consumers_only_active: 'Nur aktive Verbraucher zeigen',
   icon: 'Symbol (wenn kein Bild)', threshold_c: 'Schwelle (ab hier aktiv)',
@@ -1186,9 +1210,18 @@ const EF_SCHEMA = [
       { name: 'capacity_entity', selector: S },
       { name: 'charge_target_soc', selector: { number: { min: 1, max: 100, step: 1, mode: 'box', unit_of_measurement: '%' } } },
       { name: 'target_entity', selector: S },
+      { name: 'min_power_w', selector: { number: { min: 100, max: 22000, step: 100, mode: 'box', unit_of_measurement: 'W' } } }
+    ]),
+    efSub('Ladesteuerung (optional, z. B. EVCC)', [
       { name: 'mode_entity', selector: { entity: {} } },
-      { name: 'min_power_w', selector: { number: { min: 100, max: 22000, step: 100, mode: 'box', unit_of_measurement: 'W' } } },
-      { name: 'priority_entity', selector: { entity: {} } }
+      { name: 'always_entity', selector: { entity: {} } },
+      { name: 'solar_share_entity', selector: { entity: {} } },
+      { name: 'min_current_entity', selector: { entity: {} } },
+      { name: 'phases_entity', selector: { entity: {} } },
+      { name: 'priority_entity', selector: { entity: {} } },
+      { name: 'grid_cost_entity', selector: { entity: {} } },
+      { name: 'plan_active_entity', selector: { entity: {} } },
+      { name: 'plan_end_entity', selector: { entity: {} } }
     ]),
     efSub('Anzeige', [
       { name: 'mode', selector: { select: { mode: 'dropdown', options: [

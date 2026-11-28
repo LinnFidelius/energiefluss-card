@@ -4,7 +4,7 @@
  * Installation über HACS (Typ Dashboard) oder manuell als JavaScript-Modul (Dashboard-Ressource).
  * Alle Symbole sind eingebettet; Bildwert "ef:<name>" = eingebautes Symbol, sonst Pfad/URL.
  */
-const EF_VERSION = '2.9.1';
+const EF_VERSION = '2.10.0';
 
 // ICONS-START (automatisch erzeugt von tools/embed_icons.py)
 const EF_ICONS = {
@@ -212,6 +212,7 @@ const EF_DEFAULTS = {
   home: { entity: '', name: 'Haus', image: 'ef:haus', color: '#9AC1E4', secondary_entity: '' },
   wallbox: {
     entity: '', unit: 'kW', soc_entity: '', soc_label: 'Auto', mode: 'auto', name: 'Wallbox',
+    show_chargetime: true, capacity_kwh: 0, capacity_entity: '', charge_target_soc: 100, target_entity: '',
     image: 'ef:wallbox', color: '#FFCC99'
   },
   consumers_title: 'Verbraucher',
@@ -680,7 +681,7 @@ class EnergieflussCard extends HTMLElement {
       .filter((x) => x && (x.charge_entity || x.discharge_entity || x.power_entity));
   }
   _runWin() { return Math.min(Math.max(+this._config.battery.runtime_window || 60, 5), 240) * 60000; }
-  _runOn() { const b = this._config.battery; return !!(b.show_runtime || b.show_chargetime); }
+  _runOn() { const c = this._config, b = c.battery; return !!(b.show_runtime || b.show_chargetime || (c.wallbox.show_chargetime && c.wallbox.soc_entity)); }
 
   async _loadRunHist() {
     const c = this._config, h = this._hass;
@@ -691,7 +692,8 @@ class EnergieflussCard extends HTMLElement {
     if (this._runTry && Date.now() - this._runTry < 60000) return;
     this._runTry = Date.now();
     const bs = this._runBatts();
-    const ids = [...new Set(bs.flatMap((x) => (x.charge_entity || x.discharge_entity) ? [x.discharge_entity, x.charge_entity] : [x.power_entity])
+    const wbE = c.wallbox.show_chargetime && c.wallbox.soc_entity ? c.wallbox.entity : '', homeE = wbE ? c.home.entity : '';
+    const ids = [...new Set([...bs.flatMap((x) => (x.charge_entity || x.discharge_entity) ? [x.discharge_entity, x.charge_entity] : [x.power_entity]), wbE, homeE]
       .filter((x) => x && h.states[x]))];
     if (!ids.length) return;
     this._runLoading = true;
@@ -702,7 +704,7 @@ class EnergieflussCard extends HTMLElement {
       // je Entität: Stufenfunktion [Zeit, Watt]
       const ser = {};
       for (const id of ids) {
-        const u = (h.states[id]?.attributes?.unit_of_measurement || 'W').toLowerCase();
+        const u = (h.states[id]?.attributes?.unit_of_measurement || (id === wbE && c.wallbox.unit === 'kW' ? 'kW' : 'W')).toLowerCase();
         const f = u === 'kw' ? 1000 : u === 'mw' ? 1e6 : 1;
         ser[id] = (res?.[id] || []).map((e) => {
           const t = e.lu != null ? e.lu * 1000 : e.lc != null ? e.lc * 1000 : Date.parse(e.last_updated || e.last_changed);
@@ -718,8 +720,12 @@ class EnergieflussCard extends HTMLElement {
         return a + Math.max(dir === 'd' ? b : -b, 0);
       }, 0);
       this._ser = this._ser || {};
-      for (const k of ['d', 'c']) {
-        const out = times.map((t) => [t, sum(t, k)]);
+      const one = (id) => (ser[id] || []).map(([t, v]) => [t, Math.max(v, 0)]);
+      const build = { d: () => times.map((t) => [t, sum(t, 'd')]), c: () => times.map((t) => [t, sum(t, 'c')]),
+        wb: () => one(wbE), home: () => one(homeE) };
+      for (const k of Object.keys(build)) {
+        if ((k === 'wb' || k === 'home') && !wbE) continue;
+        const out = build[k]();
         // Live-Werte, die während des Ladens schon kamen, hinten anhängen
         const live = (this._ser[k] || []).filter((x) => x[0] > (out.length ? out[out.length - 1][0] : 0));
         this._ser[k] = [...out, ...live];
@@ -765,6 +771,44 @@ class EnergieflussCard extends HTMLElement {
     return st.t;
   }
   _hm(t) { return new Date(t).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }); }
+
+  // Ladezeit des Fahrzeugs bis zum Ladeziel. Lädt es überwiegend aus PV, wird geprüft, ob die Sonne dafür reicht:
+  // PV-Prognose (Resttag heute) minus erwarteter Hausverbrauch (ohne Wallbox) bis Sonnenuntergang minus Bedarf des Hausakkus.
+  _carText(wb, home, imp, pv, battNeed) {
+    const c = this._config, w = c.wallbox, h = this._hass;
+    const rate = this._rate('wb', wb), homeAvg = this._rate('home', Math.max(home - wb, 0));
+    if (!w.show_chargetime || !w.soc_entity || wb < 100) return '';
+    const soc = parseFloat(h.states[w.soc_entity]?.state);
+    const capS = w.capacity_entity ? parseFloat(h.states[w.capacity_entity]?.state) : NaN;
+    const cap = !isNaN(capS) && capS > 0 ? capS : +w.capacity_kwh || 0;
+    const tgS = w.target_entity ? parseFloat(h.states[w.target_entity]?.state) : NaN;
+    const target = Math.min(Math.max(!isNaN(tgS) && tgS > 0 ? tgS : +w.charge_target_soc || 100, 1), 100);
+    if (isNaN(soc) || cap <= 0) return '';
+    const need = Math.max(target - soc, 0) / 100 * cap;
+    if (need < 0.1) return '';
+    const hrs = need * 1000 / Math.max(rate, 100);
+    const eta = Date.now() + hrs * 3600000;
+    // überwiegend PV-Ladung: Netzbezug deckt weniger als die Hälfte der Ladeleistung
+    if (imp < rate * 0.5 && pv > 200) {
+      const set = Date.parse(h.states['sun.sun']?.attributes?.next_setting || '');
+      const toSet = !isNaN(set) && set - Date.now() < 18 * 3600000 ? Math.max(set - Date.now(), 0) / 3600000 : null;
+      let avail = null;
+      const fc = c.battery.forecast_entity ? h.states[c.battery.forecast_entity] : null;
+      if (fc && !isNaN(parseFloat(fc.state))) {
+        const u = (fc.attributes?.unit_of_measurement || 'kWh').toLowerCase();
+        const kwh = parseFloat(fc.state) / (u === 'wh' ? 1000 : u === 'mwh' ? 0.001 : 1);
+        avail = Math.max(kwh - homeAvg / 1000 * (toSet ?? 0) - battNeed, 0);
+        if (toSet !== null) avail = Math.min(avail, rate / 1000 * toSet);
+      } else if (toSet !== null && eta > set) avail = rate / 1000 * toSet * 0.5;
+      if (avail !== null && avail < need) {
+        const reach = Math.min(Math.max(Math.floor((soc + avail / cap * 100) / 5) * 5, Math.round(soc)), target);
+        return `heute ca. ${reach} %`;
+      }
+    }
+    if (hrs > 24) return 'voll in über 24 h';
+    const t = this._steady('wb', Math.round(eta / 600000) * 600000);
+    return (target < 100 ? `${Math.round(target)} % ` : 'voll ') + 'ca. ' + this._hm(t);
+  }
 
   // Ladezeit bis zum Ziel-Ladestand. Beim Laden aus PV wird geprüft, ob die Sonne dafür noch reicht:
   // mit PV-Prognose (Resttag heute) über den PV-Anteil, der gerade im Akku landet, sonst über den Sonnenuntergang.
@@ -920,7 +964,10 @@ class EnergieflussCard extends HTMLElement {
     if (wbVisible) {
       const wsoc = c.wallbox.soc_entity ? this._hass.states[c.wallbox.soc_entity]?.state : null;
       const wTxt = (wsoc !== null && wsoc !== undefined && !isNaN(parseFloat(wsoc))) ? `${efEsc(c.wallbox.soc_label)} ${Math.round(parseFloat(wsoc))} %` : '';
-      this._setNode('wallbox', this._fmtW(wb), wb < c.threshold, wTxt, '', true);
+      const bt = Math.min(Math.max(+c.battery.charge_target_soc || 100, 1), 100);
+      const battNeed = bc >= 50 ? bInfo.reduce((a, x) => a + (x.has ? Math.max(bt - x.soc, 0) / 100 * x.cap : 0), 0) : 0;
+      const cTxt = this._runOn() ? this._carText(wb, home, imp, pv, battNeed) : '';
+      this._setNode('wallbox', this._fmtW(wb), wb < c.threshold, wTxt, efEsc(cTxt), true);
     }
     // Autarkie
     const el = r.querySelector('.elink');
@@ -1017,7 +1064,7 @@ const EF_LABELS = {
   charge_entity: 'Lade-Sensor', discharge_entity: 'Entlade-Sensor', power_entity: 'Kombinierter Leistungs-Sensor (+ = Entladen)',
   capacity_kwh: 'Kapazität (kWh)', min_soc: 'Nutzbar bis SoC (%)', show_runtime: 'Restlaufzeit anzeigen',
   runtime_window: 'Mittelwert über (min, Restlauf- und Ladezeit)',
-  show_chargetime: 'Ladezeit anzeigen (voll um …)', charge_target_soc: 'Ladeziel (%)', forecast_entity: 'PV-Prognose Resttag heute (optional, kWh)',
+  show_chargetime: 'Ladezeit anzeigen (voll um …)', capacity_entity: 'Kapazität aus Sensor (optional, kWh)', target_entity: 'Ladeziel aus Sensor (optional, %)', charge_target_soc: 'Ladeziel (%)', forecast_entity: 'PV-Prognose Resttag heute (optional, kWh)',
   unit: 'Einheit des Sensors', soc_label: 'Bezeichnung Fahrzeug', mode: 'Anzeigen', consumers_title: 'Überschrift',
   consumers_open: 'Standard: aufgeklappt (für Geräte ohne gemerkten Zustand)', consumers_remember: 'Auf-/Zugeklappt je Gerät merken', consumers_columns: 'Verbraucher nebeneinander', consumers_only_active: 'Nur aktive Verbraucher zeigen',
   icon: 'Symbol (wenn kein Bild)', threshold_c: 'Schwelle (ab hier aktiv)',
@@ -1113,6 +1160,13 @@ const EF_SCHEMA = [
       { name: 'entity', selector: S },
       { name: 'unit', selector: { select: { mode: 'dropdown', options: [{ value: 'W', label: 'W' }, { value: 'kW', label: 'kW' }] } } },
       { name: 'soc_entity', selector: S }
+    ]),
+    efSub('Ladezeit Fahrzeug', [
+      { name: 'show_chargetime', selector: { boolean: {} } },
+      { name: 'capacity_kwh', selector: { number: { min: 0, max: 250, step: 0.1, mode: 'box', unit_of_measurement: 'kWh' } } },
+      { name: 'capacity_entity', selector: S },
+      { name: 'charge_target_soc', selector: { number: { min: 1, max: 100, step: 1, mode: 'box', unit_of_measurement: '%' } } },
+      { name: 'target_entity', selector: S }
     ]),
     efSub('Anzeige', [
       { name: 'mode', selector: { select: { mode: 'dropdown', options: [

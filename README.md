@@ -13,6 +13,7 @@ Die Vorschau klappt die Verbraucherliste automatisch auf und wieder zu.
 - Netz: Bezug rot, Einspeisung grün, Vorzeichen umkehrbar oder getrennte Bezug-/Einspeise-Sensoren
 - Akku mit Ladestand, Restlaufzeit („bis 06:40“) aus Kapazität und Mindest-SoC; Entladeleistung über die laufende Entladephase gemittelt (Standard max. 60 min, `runtime_window`), Uhrzeit auf 10 min gerundet
 - Ladezeit beim Laden („voll ca. 13:10“ bzw. Ziel-SoC `charge_target_soc`), Ladeleistung ebenfalls über die laufende Ladephase gemittelt; beim Laden aus PV Plausibilitätsprüfung mit PV-Prognose (`forecast_entity`, Resttag heute in kWh) oder Sonnenuntergang – reicht die Sonne nicht, erscheint „heute ca. 85 %“; angezeigte Uhrzeiten ändern sich erst bei mehr als 20 min Abweichung, die 3 min anhält
+- Ladezeit des Fahrzeugs an der Wallbox („80 % ca. 14:40“): Kapazität und Ladeziel fest oder aus Sensoren (`capacity_entity`, `target_entity`), Ladeleistung über die laufende Ladephase gemittelt; bei PV-Ladung Prüfung mit PV-Prognose minus Hausverbrauch (ohne Wallbox) bis Sonnenuntergang minus Bedarf des Hausakkus – reicht es nicht, erscheint „heute ca. 45 %“
 - Autarkie als Tageswert (aus Netzbezug heute und Hausverbrauch heute oder eigenem Sensor), wahlweise live
 - Wallbox wahlweise nur beim Laden, immer oder nie, mit Ladestand des Fahrzeugs
 - Einklappbare Verbraucherliste in fester Reihenfolge, nur aktive Verbraucher, mit eigenem Bild oder Symbol

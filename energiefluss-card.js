@@ -4,7 +4,7 @@
  * Installation über HACS (Typ Dashboard) oder manuell als JavaScript-Modul (Dashboard-Ressource).
  * Alle Symbole sind eingebettet; Bildwert "ef:<name>" = eingebautes Symbol, sonst Pfad/URL.
  */
-const EF_VERSION = '2.8.0';
+const EF_VERSION = '2.9.0';
 
 // ICONS-START (automatisch erzeugt von tools/embed_icons.py)
 const EF_ICONS = {
@@ -296,8 +296,11 @@ const efLayout = (c) => {
       L.gx_grid = `M${sx} 76 C 262 76, 236 ${120 + d}, 236 ${148 + d} Q 236 ${164 + d} 212 ${164 + d} H 112`;
     }
   }
-  const bridge = ['gx_home', 'gx_grid'];   // werden über andere Linien gelegt
-  return { L, H: 420 + d, d, fis, nodes, pvx, gb, gbi, battX, battW, bridge };
+  // Brücken in zwei Ebenen: PV→Haus läuft über die waagerechte Netz-Akku-Linie,
+  // die Linien der angeschlossenen PV laufen über alles (auch über PV→Haus)
+  const bridge = ['pv_home', 'gx_home', 'gx_grid'];
+  const bridgeTop = ['gx_home', 'gx_grid'];
+  return { L, H: 420 + d, d, fis, nodes, pvx, gb, gbi, battX, battW, bridge, bridgeTop };
 };
 
 const efMerge = (base, over) => {
@@ -421,13 +424,17 @@ class EnergieflussCard extends HTMLElement {
     const lay = this._lay = efLayout(c);
     this._lines = lay.L;
     this._offsets = {}; this._speeds = {};
-    const order = Object.keys(lay.L).sort((a, b) => lay.bridge.includes(a) - lay.bridge.includes(b));
-    // Brücken: darunterliegende Linien werden entlang der Brückenlinie ausgespart (Maske, unabhängig von der Hintergrundfarbe)
-    const br = order.filter((k) => lay.bridge.includes(k));
-    const mask = br.length ? `<defs><mask id="ef-under" maskUnits="userSpaceOnUse" x="-20" y="-20" width="440" height="${lay.H + 40}">
-      <rect x="-20" y="-20" width="440" height="${lay.H + 40}" fill="white"/>${br.map((k) => `<path id="h-${k}" d="${lay.L[k]}" class="halo" style="display:none"/>`).join('')}</mask></defs>` : '';
+    // Brücken: darunterliegende Linien werden entlang der Brückenlinie ausgespart (Maske, unabhängig von der Hintergrundfarbe).
+    // Ebene 0 = normale Linien, Ebene 1 = Brücke (z. B. PV→Haus), Ebene 2 = Brücke über alles.
+    const lvl = (k) => lay.bridgeTop.includes(k) ? 2 : lay.bridge.includes(k) ? 1 : 0;
+    const keys = Object.keys(lay.L).filter((k) => lay.L[k]);
+    const box = `x="-20" y="-20" width="440" height="${lay.H + 40}"`;
+    const mk = (id, from) => { const hs = keys.filter((k) => lvl(k) >= from);
+      return hs.length ? `<mask id="${id}" maskUnits="userSpaceOnUse" ${box}><rect ${box} fill="white"/>${hs.map((k) => `<path data-h="${k}" d="${lay.L[k]}" class="halo" style="display:none"/>`).join('')}</mask>` : ''; };
+    const m1 = mk('ef-under', 1), m2 = mk('ef-mid', 2);
     const one = (k) => `<g id="g-${k}" style="display:none"><path d="${lay.L[k]}" class="base"/><path id="d-${k}" d="${lay.L[k]}" class="dots"/></g>`;
-    const lines = mask + `<g ${br.length ? 'mask="url(#ef-under)"' : ''}>${order.filter((k) => !br.includes(k)).map(one).join('')}</g>` + br.map(one).join('');
+    const grp = (l, m) => { const ks = keys.filter((k) => lvl(k) === l); return ks.length ? `<g ${m ? `mask="url(#${m})"` : ''}>${ks.map(one).join('')}</g>` : ''; };
+    const lines = (m1 || m2 ? `<defs>${m1}${m2}</defs>` : '') + grp(0, m1 && 'ef-under') + grp(1, m2 && 'ef-mid') + grp(2, '');
     const top = (px) => (px / lay.H * 100).toFixed(2);
     const node = (key, x, ypx, n = c[key], w = 30) => `<div class="node${w < 30 ? ' small' : ''}" id="n-${key}" data-node="${key}" style="left:${x}%;top:${top(ypx)}%;width:${w}%">
         ${efPic(n.image, c.icon_style, n.color || (key === 'grid' ? '#FF9999' : ''))}
@@ -655,10 +662,11 @@ class EnergieflussCard extends HTMLElement {
   }
 
   _speed(p) {
-    // Tempo relativ zum Bezugswert: übliche Höchstleistung der letzten 12 Monate (Langzeitstatistik) oder fester Wert
+    // Tempo relativ zum Bezugswert: übliche Höchstleistung der letzten 12 Monate (Langzeitstatistik) oder fester Wert.
+    // Logarithmisch zwischen 50 W (langsam) und Bezugswert (schnell), damit 300 W, 1 kW und 5 kW klar unterscheidbar sind.
     const ref = Math.max((this._config.speed_reference === 'auto' && this._ref) || this._config.speed_max_w || 10000, 500);
-    const r = Math.min(p / ref, 1.2);
-    return this._config.speed * (1.5 + 12 * Math.pow(r, 0.6));
+    const r = Math.min(Math.max(Math.log(Math.max(p, 50) / 50) / Math.log(ref / 50), 0), 1.15);
+    return this._config.speed * 3 * Math.pow(14, r);   // ca. 3 bis 42 Einheiten/s
   }
 
   // ---------- Restlaufzeit und Ladezeit Akku ----------
@@ -837,7 +845,7 @@ class EnergieflussCard extends HTMLElement {
       const on = p >= c.threshold && (k !== 'home_wb' || wbVisible);
       const g = r.getElementById('g-' + k);
       g.style.display = on ? '' : 'none';
-      const hl = r.getElementById('h-' + k); if (hl) hl.style.display = on ? '' : 'none';
+      r.querySelectorAll(`[data-h="${k}"]`).forEach((hl) => { hl.style.display = on ? '' : 'none'; });
       if (on) g.querySelectorAll('path').forEach((pa) => pa.setAttribute('stroke', col[k]));
       this._speeds[k] = on ? this._speed(p) : 0;
     }

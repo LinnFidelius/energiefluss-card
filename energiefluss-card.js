@@ -4,7 +4,7 @@
  * Installation über HACS (Typ Dashboard) oder manuell als JavaScript-Modul (Dashboard-Ressource).
  * Alle Symbole sind eingebettet; Bildwert "ef:<name>" = eingebautes Symbol, sonst Pfad/URL.
  */
-const EF_VERSION = '2.10.0';
+const EF_VERSION = '2.10.1';
 
 // ICONS-START (automatisch erzeugt von tools/embed_icons.py)
 const EF_ICONS = {
@@ -792,7 +792,10 @@ class EnergieflussCard extends HTMLElement {
     // Lademodus (z. B. aus EVCC): off = keine Anzeige, now = sofort mit voller Leistung,
     // minpv = PV, bei zu wenig Sonne mit Mindestleistung weiter, pv = nur Überschuss (endet abends)
     const mRaw = w.mode_entity ? String(h.states[w.mode_entity]?.state || '').toLowerCase().replace(/\s/g, '') : '';
-    const mode = ({ aus: 'off', schnell: 'now', sofort: 'now', fast: 'now', 'min+pv': 'minpv', solar: 'pv' })[mRaw] || mRaw;
+    // „Smart“ (EVCC) lädt aus PV-Überschuss wie „pv“; unbekannte Modi werden wie ohne Modus behandelt (Erkennung über den Netzbezug)
+    const known = { off: 'off', now: 'now', minpv: 'minpv', pv: 'pv', aus: 'off', schnell: 'now', sofort: 'now', fast: 'now',
+      'min+pv': 'minpv', solar: 'pv', smart: 'pv' };
+    const mode = known[mRaw] || '';
     if (mode === 'off') return '';
     const pvMode = mode === 'pv' || mode === 'minpv' || (!mode && imp < rate * 0.5 && pv > 200);
     if (pvMode && mode !== 'now') {

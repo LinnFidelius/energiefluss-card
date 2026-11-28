@@ -4,7 +4,7 @@
  * Installation über HACS (Typ Dashboard) oder manuell als JavaScript-Modul (Dashboard-Ressource).
  * Alle Symbole sind eingebettet; Bildwert "ef:<name>" = eingebautes Symbol, sonst Pfad/URL.
  */
-const EF_VERSION = '2.9.0';
+const EF_VERSION = '2.9.1';
 
 // ICONS-START (automatisch erzeugt von tools/embed_icons.py)
 const EF_ICONS = {
@@ -1008,7 +1008,7 @@ class EnergieflussCard extends HTMLElement {
 
 // ======================= Editor =======================
 const EF_LABELS = {
-  title: 'Titel (optional)', transparent: 'Transparenter Hintergrund', show_autarky: 'Autarkie anzeigen', icon_style: 'Symbolstil', energy_link: 'Link zum Energie-Dashboard (leer = aus)', autarky_mode: 'Autarkie-Berechnung', autarky_entity: 'Autarkie-Sensor heute (optional, %)',
+  title: 'Titel (optional)', transparent: 'Transparenter Hintergrund', show_autarky: 'Autarkie anzeigen', icon_style: 'Symbolstil', energy_link: 'Link zum Energie-Dashboard (leer = aus)', autarky_mode: 'Autarkie-Berechnung', autarky_entity: 'Autarkie-Sensor heute (optional)',
   speed: 'Tempo der Animation (1 = normal)', threshold: 'Schwelle für Linien', kilo_threshold: 'Ab hier in kW anzeigen',
   decimals_kw: 'Nachkommastellen bei kW', entity: 'Leistungs-Sensor', name: 'Name', image: 'Bild (eingebaut wählen oder eigenen Pfad eintragen)',
   color: 'Farbe (Hex)', secondary_entity: 'Zusatzwert (z. B. heute)', secondary_entity_2: 'Zusatzwert 2 (Einspeisung heute)',
@@ -1052,11 +1052,10 @@ const EF_SCHEMA = [
       { name: 'transparent', selector: { boolean: {} } },
       { name: 'show_autarky', selector: { boolean: {} } }
     ] },
-    { type: 'grid', name: '', schema: [
-      { name: 'autarky_mode', selector: { select: { mode: 'dropdown', options: [
-        { value: 'day', label: 'Tageswert' }, { value: 'live', label: 'Live' }] } } },
-      { name: 'autarky_entity', selector: S }
-    ] },
+    // Entitätsauswahl volle Breite: im Raster steht ihre Beschriftung sonst versetzt über dem Feld
+    { name: 'autarky_mode', selector: { select: { mode: 'dropdown', options: [
+      { value: 'day', label: 'Tageswert' }, { value: 'live', label: 'Live' }] } } },
+    { name: 'autarky_entity', selector: S },
     { type: 'grid', name: '', schema: [
       { name: 'speed', selector: { number: { min: 0.1, max: 5, step: 0.1, mode: 'box' } } },
       { name: 'speed_reference', selector: { select: { mode: 'dropdown', options: [
@@ -1092,10 +1091,8 @@ const EF_SCHEMA = [
       ] },
       { name: 'show_runtime', selector: { boolean: {} } },
       { name: 'show_chargetime', selector: { boolean: {} } },
-      { type: 'grid', name: '', schema: [
-        { name: 'charge_target_soc', selector: { number: { min: 1, max: 100, step: 1, mode: 'box', unit_of_measurement: '%' } } },
-        { name: 'forecast_entity', selector: S }
-      ] },
+      { name: 'charge_target_soc', selector: { number: { min: 1, max: 100, step: 1, mode: 'box', unit_of_measurement: '%' } } },
+      { name: 'forecast_entity', selector: S },
       { name: 'runtime_window', selector: { number: { min: 5, max: 240, step: 5, mode: 'box', unit_of_measurement: 'min' } } },
       { name: 'show_breakdown', selector: { boolean: {} } }
     ]),
@@ -1140,7 +1137,7 @@ const EF_SCHEMA = [
 const EF_NUM = (min, max, step, unit) => ({ number: { min, max, step, mode: 'box', unit_of_measurement: unit } });
 const EF_PV_SCHEMA = [
   { name: 'entity', selector: S },
-  { type: 'grid', name: '', schema: [{ name: 'name', selector: { text: {} } }, { name: 'secondary_entity', selector: S }] },
+  { name: 'name', selector: { text: {} } }, { name: 'secondary_entity', selector: S },
   { name: 'node', selector: { select: { mode: 'dropdown', options: [
     { value: 'none', label: 'nur in der PV-Summe' }, { value: 'pv', label: 'eigener Knoten, Linie in die Haupt-PV' },
     { value: 'battery', label: 'eigener Knoten, Linie in den Akku (eigene Batterie)' }] } } },
@@ -1148,7 +1145,7 @@ const EF_PV_SCHEMA = [
 ];
 const EF_FI_SCHEMA = [
   { name: 'entity', selector: S },
-  { type: 'grid', name: '', schema: [{ name: 'name', selector: { text: {} } }, { name: 'secondary_entity', selector: S }] },
+  { name: 'name', selector: { text: {} } }, { name: 'secondary_entity', selector: S },
   efSub('Bild', [{ name: 'image', selector: EF_IMG }]), efActions()
 ];
 const EF_BATT_SCHEMA = [
